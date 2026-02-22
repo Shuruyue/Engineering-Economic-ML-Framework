@@ -8,6 +8,7 @@ This module is responsible for collecting data from multiple sources:
 """
 
 import os
+import numpy as np
 import pandas as pd
 import warnings
 warnings.filterwarnings('ignore')
@@ -16,13 +17,22 @@ warnings.filterwarnings('ignore')
 try:
     import yfinance as yf
 except ImportError:
-    print("Please install yfinance: pip install yfinance")
     yf = None
 
 class IPADataCollector:
     """
     Isopropyl Alcohol Price Prediction - Data Collector
     """
+
+    MARKET_COLUMNS = [
+        'WTI_Price', 'Brent_Price', 'NatGas_Price',
+        'USD_TWD', 'DXY', 'TWII', 'TSM_Price'
+    ]
+    EVENT_COLUMNS = [
+        'COVID19', 'Ukraine_War', 'RedSea_Crisis',
+        'US_China_Trade', 'Geopolitical_Risk'
+    ]
+    REQUIRED_CACHE_COLUMNS = MARKET_COLUMNS + EVENT_COLUMNS
     
     def __init__(
         self,
@@ -62,13 +72,39 @@ class IPADataCollector:
             f"market_data_{safe_start}_{safe_end}.csv"
         )
 
+    def _validate_cached_data(self, df):
+        if df is None or df.empty:
+            return False, "cached data is empty"
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return False, "cache index is not DatetimeIndex"
+
+        missing_columns = [col for col in self.REQUIRED_CACHE_COLUMNS if col not in df.columns]
+        if missing_columns:
+            return False, f"missing columns: {missing_columns}"
+
+        return True, "ok"
+
+    def _normalize_output_schema(self, df):
+        """
+        Ensure merged output keeps stable schema for downstream steps.
+        """
+        result = df.copy()
+        for col in self.REQUIRED_CACHE_COLUMNS:
+            if col not in result.columns:
+                result[col] = 0.0 if col in self.EVENT_COLUMNS else np.nan
+
+        result = result[self.REQUIRED_CACHE_COLUMNS]
+        result = result.apply(pd.to_numeric, errors='coerce')
+        result[self.EVENT_COLUMNS] = result[self.EVENT_COLUMNS].fillna(0).astype(int)
+        result = result.sort_index().ffill()
+        return result
+
     def _download_close_price(self, ticker, column_name):
         """
         Download close price series and normalize output schema.
         Handles both normal and MultiIndex yfinance responses.
         """
         if yf is None:
-            print(f"  [WARN] yfinance unavailable, skip {ticker}")
             return None
 
         raw = yf.download(
@@ -107,6 +143,10 @@ class IPADataCollector:
         Brent: BZ=F (Brent Crude Oil Futures)
         """
         print("Fetching crude oil prices...")
+
+        if yf is None:
+            print("  [WARN] yfinance unavailable, crude oil prices skipped")
+            return None
         
         try:
             # WTI crude oil
@@ -114,9 +154,13 @@ class IPADataCollector:
             
             # Brent crude oil
             brent = self._download_close_price('BZ=F', 'Brent_Price')
-            
+
+            candidates = [df for df in [wti, brent] if df is not None and not df.empty]
+            if not candidates:
+                raise ValueError("No crude oil data returned")
+
             # Merge
-            oil_prices = pd.concat([wti, brent], axis=1)
+            oil_prices = pd.concat(candidates, axis=1)
             self.data['crude_oil'] = oil_prices
             print(f"  [OK] Crude oil prices: {len(oil_prices)} records")
             return oil_prices
@@ -132,9 +176,15 @@ class IPADataCollector:
         NG=F: Henry Hub Natural Gas Futures
         """
         print("Fetching natural gas prices...")
+
+        if yf is None:
+            print("  [WARN] yfinance unavailable, natural gas prices skipped")
+            return None
         
         try:
             ng = self._download_close_price('NG=F', 'NatGas_Price')
+            if ng is None or ng.empty:
+                raise ValueError("No natural gas data returned")
             self.data['natural_gas'] = ng
             print(f"  [OK] Natural gas prices: {len(ng)} records")
             return ng
@@ -151,6 +201,10 @@ class IPADataCollector:
         DX-Y.NYB: US Dollar Index (DXY)
         """
         print("Fetching exchange rate data...")
+
+        if yf is None:
+            print("  [WARN] yfinance unavailable, exchange rate data skipped")
+            return None
         
         try:
             # USD/TWD
@@ -159,8 +213,12 @@ class IPADataCollector:
             # DXY US Dollar Index
             dxy = self._download_close_price('DX-Y.NYB', 'DXY')
             
+            candidates = [df for df in [usdtwd, dxy] if df is not None and not df.empty]
+            if not candidates:
+                raise ValueError("No exchange rate data returned")
+
             # Merge
-            fx_rates = pd.concat([usdtwd, dxy], axis=1)
+            fx_rates = pd.concat(candidates, axis=1)
             self.data['exchange_rates'] = fx_rates
             print(f"  [OK] Exchange rate data: {len(fx_rates)} records")
             return fx_rates
@@ -177,6 +235,10 @@ class IPADataCollector:
         TSM: TSMC ADR (Semiconductor proxy indicator)
         """
         print("Fetching stock indices...")
+
+        if yf is None:
+            print("  [WARN] yfinance unavailable, stock indices skipped")
+            return None
         
         try:
             # Taiwan Weighted Index
@@ -185,7 +247,11 @@ class IPADataCollector:
             # TSMC ADR (as semiconductor industry proxy)
             tsm = self._download_close_price('TSM', 'TSM_Price')
             
-            indices = pd.concat([twii, tsm], axis=1)
+            candidates = [df for df in [twii, tsm] if df is not None and not df.empty]
+            if not candidates:
+                raise ValueError("No stock index data returned")
+
+            indices = pd.concat(candidates, axis=1)
             self.data['stock_indices'] = indices
             print(f"  [OK] Stock indices: {len(indices)} records")
             return indices
@@ -241,6 +307,9 @@ class IPADataCollector:
             try:
                 cached = pd.read_csv(self.cache_file, parse_dates=['Date'], index_col='Date')
                 cached = cached.sort_index()
+                valid, reason = self._validate_cached_data(cached)
+                if not valid:
+                    raise ValueError(f"invalid cache ({reason})")
                 print("\n" + "=" * 50)
                 print("Loading cached market data...")
                 print("=" * 50 + "\n")
@@ -248,7 +317,7 @@ class IPADataCollector:
                 print(f"  Total records: {len(cached)}")
                 print(f"  Number of columns: {len(cached.columns)}")
                 print(f"  Time range: {cached.index.min()} ~ {cached.index.max()}")
-                return cached
+                return self._normalize_output_schema(cached)
             except Exception as e:
                 print(f"[WARN] Failed to load cache, fallback to remote collection: {e}")
 
@@ -287,7 +356,7 @@ class IPADataCollector:
         all_data = all_data.loc[:, ~all_data.columns.duplicated()]
         
         # Keep causal filling only to avoid future information leakage
-        all_data = all_data.sort_index().ffill()
+        all_data = self._normalize_output_schema(all_data)
         
         print(f"\n[OK] Data collection complete!")
         print(f"  Total records: {len(all_data)}")

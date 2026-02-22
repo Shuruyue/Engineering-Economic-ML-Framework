@@ -25,8 +25,22 @@ class IPAFeatureEngineer:
     def __init__(self):
         self.scaler = StandardScaler()
         self.target_scaler = MinMaxScaler()
+
+    @staticmethod
+    def _validate_target_series(df, target_col):
+        if df is None or df.empty:
+            raise ValueError("IPA target series is empty.")
+        if target_col not in df.columns:
+            raise ValueError(f"Missing target column: {target_col}")
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("Target index must be DatetimeIndex.")
+        if not df.index.is_monotonic_increasing:
+            df = df.sort_index()
+        if df[target_col].isna().all():
+            raise ValueError("Target series contains only NaN values.")
+        return df
         
-    def create_ipa_price_data(self):
+    def create_ipa_price_data(self, interpolation='cubic'):
         """
         Create IPA price data based on user-provided chart
         
@@ -113,9 +127,18 @@ class IPAFeatureEngineer:
             'IPA_Price_TWD': prices
         }, index=dates)
         ipa_df.index.name = 'Date'
+
+        ipa_df = self._validate_target_series(ipa_df, 'IPA_Price_TWD')
         
         # Interpolate to weekly data
-        ipa_weekly = ipa_df.resample('W').interpolate(method='cubic')
+        ipa_weekly = ipa_df.resample('W-SUN').mean()
+        try:
+            ipa_weekly = ipa_weekly.interpolate(method=interpolation)
+        except Exception:
+            # Keep deterministic fallback when SciPy/cubic is unavailable.
+            ipa_weekly = ipa_weekly.interpolate(method='linear')
+        ipa_weekly = ipa_weekly.ffill().bfill()
+        ipa_weekly = self._validate_target_series(ipa_weekly, 'IPA_Price_TWD')
         
         return ipa_weekly
     
@@ -219,6 +242,7 @@ class IPAFeatureEngineer:
         Complete feature engineering pipeline
         """
         print("Starting feature engineering...")
+        df = self._validate_target_series(df, target_col)
         
         # 1. Lag features
         print("  - Creating lag features...")

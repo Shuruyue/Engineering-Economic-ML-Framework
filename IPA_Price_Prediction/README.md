@@ -1,32 +1,36 @@
-# IPA Price Prediction (異丙醇價格預測模型)
+# IPA Price Prediction (異丙醇季度價格預測)
 
-本專案為工程經濟課程之 IPA (Isopropyl Alcohol) 價格預測實作，輸出季度價格與情境區間。
+本子專案為工程經濟課程的 IPA (Isopropyl Alcohol) 價格預測最終版，聚焦「可重現、可交付、可維護」。
+
+## 最終優化重點 (封版)
+
+1. 資料蒐集穩定化: 快取欄位驗證、輸出 schema 標準化、缺依賴時可降級執行。  
+2. 特徵工程完整化: 目標序列驗證與插值 fallback（`cubic -> linear`）。  
+3. 模型評估一致化: 以內部模型 key 計算自適應權重，避免名稱不一致。  
+4. 交付工件補齊: HTML、圖表、CSV、JSON manifest、多年度總表一次產出。  
+5. 文件封版: 執行參數、輸出定義、維護邊界明確化。  
 
 ## 專案目標
 
-- 使用 2012-01 至 2024-12 歷史資料。
-- 預測 2025 與 2026 年 Q1-Q4 IPA 價格 (TWD/KG)。
-- 納入多因子: 能源、匯率、股市代理、地緣事件、季節性。
+- 使用歷史資料區間 `2012-01-01` 到 `2024-12-31`。
+- 預測 `2025` 與 `2026` 年 Q1-Q4 IPA 價格 (TWD/KG)。
+- 融合能源、匯率、股市代理變數、地緣事件與季節性特徵。
 
-## 方法摘要
+## 模型流程摘要
 
-- 資料處理:
-  - 外部市場資料下載與整併
-  - 時間序列前向補值 (避免未來資訊洩漏)
-  - 分位數異常值裁切
+- 資料來源:
+  - 目標值: 由圖表還原之 IPA 價格序列
+  - 外生變數: Yahoo Finance + 事件指標
 - 特徵工程:
   - lag / rolling / pct change / time seasonal encoding
 - 模型:
-  - Walk-forward 調參 XGBoost
-  - SARIMA 基準模型
-  - 依 MAPE 自動加權 ensemble
+  - Walk-forward 調參樹模型 (`XGBoost`，若缺套件自動降級 `GradientBoosting`)
+  - `SARIMA` 基準模型
+  - 依測試 `MAPE` 反向加權 ensemble
 - 預測:
-  - 遞迴式逐季預測
-  - 外生變數阻尼漂移投影 (damped drift)
-  - 自適應不確定區間 (歷史波動 + 測試殘差)
-- 執行效率:
-  - 市場資料本地快取 (`Code/Data/market_data_*.csv`)
-  - 一次訓練可同時輸出多年度報告
+  - 遞迴式逐季推進
+  - 外生變數阻尼漂移投影
+  - 波動 + 殘差導出的自適應區間
 
 ## 目錄結構
 
@@ -37,6 +41,7 @@ IPA_Price_Prediction/
 │   ├── ipa_feature_engineering.py
 │   ├── ipa_models.py
 │   ├── ipa_price_prediction.py
+│   ├── requirements.txt
 │   ├── Data/
 │   ├── figures/
 │   └── reports/
@@ -47,8 +52,8 @@ IPA_Price_Prediction/
 ## 快速開始
 
 ```bash
-cd Code
-pip install yfinance xgboost scikit-learn matplotlib statsmodels
+cd IPA_Price_Prediction/Code
+pip install -r requirements.txt
 python ipa_price_prediction.py --years 2025 2026
 ```
 
@@ -60,11 +65,37 @@ python ipa_price_prediction.py --years 2025
 
 # 強制重新抓取外部資料 (忽略快取)
 python ipa_price_prediction.py --years 2025 2026 --refresh-cache
+
+# 自訂輸出目錄
+python ipa_price_prediction.py --years 2025 2026 --figures-dir figures --reports-dir reports
 ```
 
-## 輸出檔案
+## 輸出工件
 
-- 圖表: `Code/figures/`
-- 報告:
-  - `Code/reports/ipa_forecast_2025.html`
-  - `Code/reports/ipa_forecast_2026.html`
+執行後會產生:
+
+- `Code/figures/`
+  - `historical_prices.png`
+  - `prediction_2025.png`
+  - `prediction_2026.png`
+  - `model_comparison.png`
+- `Code/reports/`
+  - `ipa_forecast_2025.html`
+  - `ipa_forecast_2026.html`
+  - `ipa_forecast_2025.csv`
+  - `ipa_forecast_2026.csv`
+  - `ipa_forecast_all_years.csv`
+  - `model_metrics.csv`
+  - `feature_importance.csv`
+  - `sensitivity_analysis.csv`
+  - `ensemble_weights.json`
+  - `run_manifest_2025.json`
+  - `run_manifest_2026.json`
+
+## 維護模式建議
+
+本專案已進入最終版，後續建議僅做必要維護:
+
+- 套件/API 相容性修正
+- 快取資料刷新
+- 報告年份延伸

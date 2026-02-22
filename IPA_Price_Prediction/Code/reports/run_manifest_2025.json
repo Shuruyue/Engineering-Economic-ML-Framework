@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-02-22 11:23:25",
+  "target_year": 2025,
+  "start_date": "2012-01-01",
+  "end_date": "2024-12-31",
+  "cache_dir": "C:\\Users\\zhong\\Desktop\\Engineering-Economic-ML-Framework\\IPA_Price_Prediction\\Code\\Data",
+  "use_cache": true,
+  "refresh_cache": false,
+  "random_seed": 42,
+  "model_display_names": {
+    "xgboost": "GradientBoosting",
+    "sarima": "SARIMA",
+    "ensemble": "Ensemble"
+  },
+  "ensemble_weights": {
+    "xgboost": 0.8442682859067863,
+    "sarima": 0.1557317140932137
+  }
+}

@@ -23,14 +23,12 @@ try:
     ARIMA_AVAILABLE = True
 except ImportError:
     ARIMA_AVAILABLE = False
-    print("ARIMA not available: pip install statsmodels")
 
 try:
     import xgboost as xgb
     XGB_AVAILABLE = True
 except ImportError:
     XGB_AVAILABLE = False
-    print("XGBoost not available: pip install xgboost")
 
 try:
     from tensorflow.keras.models import Sequential
@@ -225,29 +223,36 @@ class XGBoostModel:
         self.max_depth = max_depth
         self.learning_rate = learning_rate
         self.model = None
+        self.backend_name = None
+        self.display_name = None
         
     def fit(self, X, y):
         """Train model"""
         if not XGB_AVAILABLE:
             # Use sklearn's GradientBoosting as alternative
-            print("Using GradientBoostingRegressor...")
+            print("XGBoost unavailable, using GradientBoostingRegressor backend...")
             self.model = GradientBoostingRegressor(
                 n_estimators=self.n_estimators,
                 max_depth=self.max_depth,
                 learning_rate=self.learning_rate,
                 random_state=42
             )
+            self.backend_name = 'gradient_boosting'
+            self.display_name = 'GradientBoosting'
         else:
             print("Training XGBoost...")
             self.model = xgb.XGBRegressor(
                 n_estimators=self.n_estimators,
                 max_depth=self.max_depth,
                 learning_rate=self.learning_rate,
-                random_state=42
+                random_state=42,
+                n_jobs=1
             )
+            self.backend_name = 'xgboost'
+            self.display_name = 'XGBoost'
             
         self.model.fit(X, y)
-        print("[OK] XGBoost training complete")
+        print(f"[OK] {self.display_name} training complete")
         
         return self
     
@@ -262,6 +267,11 @@ class XGBoostModel:
             'feature': feature_names,
             'importance': importance
         }).sort_values('importance', ascending=False)
+
+    def get_display_name(self):
+        if self.display_name:
+            return self.display_name
+        return 'XGBoost'
 
 
 class EnsembleModel:
