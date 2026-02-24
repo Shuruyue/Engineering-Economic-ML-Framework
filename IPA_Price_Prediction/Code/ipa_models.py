@@ -218,10 +218,11 @@ class XGBoostModel:
     XGBoost Gradient Boosting Model
     """
     
-    def __init__(self, n_estimators=100, max_depth=6, learning_rate=0.1):
+    def __init__(self, n_estimators=100, max_depth=6, learning_rate=0.1, subsample=1.0):
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.learning_rate = learning_rate
+        self.subsample = subsample
         self.model = None
         self.backend_name = None
         self.display_name = None
@@ -235,6 +236,7 @@ class XGBoostModel:
                 n_estimators=self.n_estimators,
                 max_depth=self.max_depth,
                 learning_rate=self.learning_rate,
+                subsample=self.subsample,
                 random_state=42
             )
             self.backend_name = 'gradient_boosting'
@@ -245,6 +247,7 @@ class XGBoostModel:
                 n_estimators=self.n_estimators,
                 max_depth=self.max_depth,
                 learning_rate=self.learning_rate,
+                subsample=self.subsample,
                 random_state=42,
                 n_jobs=1
             )
@@ -272,116 +275,6 @@ class XGBoostModel:
         if self.display_name:
             return self.display_name
         return 'XGBoost'
-
-
-class EnsembleModel:
-    """
-    Ensemble Model - Combines predictions from multiple models
-    """
-    
-    def __init__(self, models, weights=None):
-        """
-        Parameters:
-        -----------
-        models : dict
-            Model dictionary {name: model}
-        weights : dict
-            Weight dictionary {name: weight}
-        """
-        self.models = models
-        self.weights = weights or {name: 1.0 for name in models}
-        
-        # Normalize weights
-        total = sum(self.weights.values())
-        self.weights = {k: v/total for k, v in self.weights.items()}
-        
-    def predict(self, predictions_dict):
-        """
-        Ensemble prediction
-        
-        Parameters:
-        -----------
-        predictions_dict : dict
-            Prediction results from each model {name: predictions}
-        """
-        ensemble_pred = None
-        
-        for name, pred in predictions_dict.items():
-            if name in self.weights:
-                weighted_pred = pred * self.weights[name]
-                if ensemble_pred is None:
-                    ensemble_pred = weighted_pred
-                else:
-                    ensemble_pred += weighted_pred
-                    
-        return ensemble_pred
-
-
-class ScenarioPredictor:
-    """
-    Scenario Predictor - Generates high/medium/low scenario predictions
-    """
-    
-    def __init__(self, base_model):
-        self.base_model = base_model
-        
-    def predict_scenarios(self, X, base_prediction, volatility=0.1):
-        """
-        Generate three scenario predictions
-        
-        Parameters:
-        -----------
-        X : array
-            Feature data
-        base_prediction : array
-            Base prediction
-        volatility : float
-            Volatility (used to calculate scenario range)
-        """
-        scenarios = {
-            'optimistic': base_prediction * (1 + volatility),
-            'base': base_prediction,
-            'pessimistic': base_prediction * (1 - volatility)
-        }
-        
-        return pd.DataFrame(scenarios)
-    
-    @staticmethod
-    def sensitivity_analysis(model, X, y, feature_names, perturbation=0.1):
-        """
-        Sensitivity analysis
-        
-        Parameters:
-        -----------
-        model : fitted model
-            Trained model
-        X : array
-            Feature data
-        y : array
-            Actual values
-        feature_names : list
-            Feature names
-        perturbation : float
-            Perturbation ratio
-        """
-        base_pred = model.predict(X)
-        base_error = mean_absolute_error(y, base_pred)
-        
-        sensitivity = {}
-        
-        for i, feature in enumerate(feature_names):
-            X_perturbed = X.copy()
-            X_perturbed[:, i] *= (1 + perturbation)
-            
-            perturbed_pred = model.predict(X_perturbed)
-            perturbed_error = mean_absolute_error(y, perturbed_pred)
-            
-            sensitivity[feature] = (perturbed_error - base_error) / base_error * 100
-            
-        return pd.DataFrame({
-            'feature': list(sensitivity.keys()),
-            'sensitivity': list(sensitivity.values())
-        }).sort_values('sensitivity', ascending=False)
 
 
 # Main test program

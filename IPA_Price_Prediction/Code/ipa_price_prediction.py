@@ -2,11 +2,15 @@
 IPA Price Prediction Model - Main Script
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import os
 import re
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 import warnings
 
 import matplotlib
@@ -17,6 +21,8 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 
 warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
 
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'SimHei', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
@@ -37,16 +43,16 @@ class IPAPricePredictor:
 
     def __init__(
         self,
-        target_year=2025,
-        start_date='2012-01-01',
-        end_date='2024-12-31',
-        cache_dir='Data',
-        figures_dir='figures',
-        reports_dir='reports',
-        use_cache=True,
-        refresh_cache=False,
-        random_seed=42
-    ):
+        target_year: int = 2025,
+        start_date: str = '2012-01-01',
+        end_date: str = '2024-12-31',
+        cache_dir: str = 'Data',
+        figures_dir: str = 'figures',
+        reports_dir: str = 'reports',
+        use_cache: bool = True,
+        refresh_cache: bool = False,
+        random_seed: int = 42
+    ) -> None:
         self.target_year = target_year
         self.start_date = start_date
         self.end_date = end_date
@@ -58,31 +64,31 @@ class IPAPricePredictor:
         self.refresh_cache = refresh_cache
         self.random_seed = random_seed
 
-        self.data = None
-        self.quarterly_data = None
-        self.models = {}
-        self.predictions = {}
-        self.results = []
-        self.feature_cols = []
-        self.exogenous_feature_cols = []
-        self.X = None
-        self.y = None
-        self.y_test = None
-        self.future_predictions = None
-        self.sensitivity_results = None
-        self.feature_importance_df = None
-        self.ensemble_weights = {}
-        self.artifacts = {}
-        self.model_display_names = {
+        self.data: Optional[pd.DataFrame] = None
+        self.quarterly_data: Optional[pd.DataFrame] = None
+        self.models: Dict[str, Any] = {}
+        self.predictions: Dict[str, np.ndarray] = {}
+        self.results: List[Dict[str, Any]] = []
+        self.feature_cols: List[str] = []
+        self.exogenous_feature_cols: List[str] = []
+        self.X: Optional[np.ndarray] = None
+        self.y: Optional[np.ndarray] = None
+        self.y_test: Optional[np.ndarray] = None
+        self.future_predictions: Optional[pd.DataFrame] = None
+        self.sensitivity_results: Optional[Dict[str, float]] = None
+        self.feature_importance_df: Optional[pd.DataFrame] = None
+        self.ensemble_weights: Dict[str, float] = {}
+        self.artifacts: Dict[str, str] = {}
+        self.model_display_names: Dict[str, str] = {
             'xgboost': 'XGBoost',
             'sarima': 'SARIMA',
             'ensemble': 'Ensemble'
         }
-        self.generated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.generated_at: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         np.random.seed(self.random_seed)
 
-    def _resolve_path(self, path):
+    def _resolve_path(self, path: str) -> str:
         if os.path.isabs(path):
             return path
         return os.path.join(self.base_dir, path)
@@ -131,6 +137,12 @@ class IPAPricePredictor:
             {'n_estimators': 120, 'max_depth': 4, 'learning_rate': 0.05},
             {'n_estimators': 150, 'max_depth': 4, 'learning_rate': 0.08},
             {'n_estimators': 180, 'max_depth': 5, 'learning_rate': 0.08},
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.03, 'subsample': 0.8},
+            {'n_estimators': 150, 'max_depth': 3, 'learning_rate': 0.05, 'subsample': 0.8},
+            {'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.03, 'subsample': 0.7},
+            {'n_estimators': 120, 'max_depth': 5, 'learning_rate': 0.05, 'subsample': 0.8},
+            {'n_estimators': 200, 'max_depth': 3, 'learning_rate': 0.02, 'subsample': 0.9},
+            {'n_estimators': 250, 'max_depth': 4, 'learning_rate': 0.03, 'subsample': 0.8},
         ]
         print("Walk-forward tuning for XGBoost...")
         best_params, best_score = None, float('inf')
@@ -665,53 +677,142 @@ class IPAPricePredictor:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IPA Price Prediction Report - {self.target_year}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body {{ font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
-    table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
-    th, td {{ border: 1px solid #ddd; padding: 10px; text-align: center; }}
-    th {{ background: #3498db; color: #fff; }}
-    .summary {{ background: #f3f8ff; padding: 16px; border-radius: 8px; }}
-    .metrics {{ background: #f7f7f7; padding: 12px; border-radius: 8px; }}
-    img {{ max-width: 100%; border-radius: 8px; }}
+    :root {{
+      --bg: #f5f7fa;
+      --card: #ffffff;
+      --accent: #2563eb;
+      --accent-light: #dbeafe;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --green: #16a34a;
+      --red: #dc2626;
+      --border: #e2e8f0;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }}
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      font-family: 'Inter', 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+      background: var(--bg); color: var(--text);
+      max-width: 960px; margin: 0 auto; padding: 24px; line-height: 1.6;
+    }}
+    .header {{
+      background: linear-gradient(135deg, #1e40af, #3b82f6);
+      color: white; padding: 32px; border-radius: 16px;
+      margin-bottom: 24px; box-shadow: 0 4px 12px rgba(37,99,235,0.3);
+    }}
+    .header h1 {{ font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; }}
+    .header p {{ opacity: 0.85; font-size: 0.9rem; }}
+    .card {{
+      background: var(--card); border-radius: 12px;
+      padding: 24px; margin-bottom: 20px;
+      border: 1px solid var(--border); box-shadow: var(--shadow);
+    }}
+    .card h2 {{
+      font-size: 1.1rem; font-weight: 600; margin-bottom: 16px;
+      padding-bottom: 8px; border-bottom: 2px solid var(--accent-light);
+    }}
+    .stats-grid {{
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    }}
+    .stat-box {{
+      background: var(--accent-light); border-radius: 10px; padding: 16px; text-align: center;
+    }}
+    .stat-box .value {{ font-size: 1.5rem; font-weight: 700; color: var(--accent); }}
+    .stat-box .label {{ font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th {{ background: var(--accent); color: white; padding: 10px 12px;
+         font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }}
+    td {{ padding: 10px 12px; text-align: center; border-bottom: 1px solid var(--border); }}
+    tr:nth-child(even) {{ background: #f8fafc; }}
+    tr:hover {{ background: var(--accent-light); }}
+    .positive {{ color: var(--green); font-weight: 500; }}
+    .negative {{ color: var(--red); font-weight: 500; }}
+    .metric-bar {{ display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; border-radius: 8px; background: #f8fafc; margin-bottom: 6px; }}
+    .metric-bar strong {{ min-width: 140px; }}
+    img {{ max-width: 100%; border-radius: 10px; margin: 8px 0; }}
+    ul {{ padding-left: 20px; }}
+    li {{ margin-bottom: 4px; }}
+    a {{ color: var(--accent); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .disclaimer {{
+      font-size: 0.8rem; color: var(--text-muted);
+      border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px;
+    }}
   </style>
 </head>
 <body>
-  <h1>Isopropyl Alcohol (IPA) Price Prediction Report</h1>
-  <p><strong>Forecast Year:</strong> {self.target_year} | <strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-  <div class="summary">
-    <p><strong>Base Mean:</strong> {self.future_predictions['Base'].mean():.2f} TWD/KG</p>
-    <p><strong>Optimistic Mean:</strong> {self.future_predictions['Optimistic'].mean():.2f} TWD/KG</p>
-    <p><strong>Pessimistic Mean:</strong> {self.future_predictions['Pessimistic'].mean():.2f} TWD/KG</p>
+  <div class="header">
+    <h1>IPA Price Prediction Report</h1>
+    <p>Forecast Year: {self.target_year} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
   </div>
-  <h2>Quarterly Prediction</h2>
-  <table>
-    <tr><th>Quarter</th><th>Base</th><th>Optimistic</th><th>Pessimistic</th></tr>
-    {rows_html}
-  </table>
-  <h2>Figures</h2>
-  <p><img src="../figures/historical_prices.png" alt="Historical"></p>
-  <p><img src="../figures/prediction_{self.target_year}.png" alt="Prediction"></p>
-  <p><img src="../figures/model_comparison.png" alt="Model Comparison"></p>
-  <h2>Model Evaluation</h2>
-  <div class="metrics">{metrics_html}</div>
-  <h2>Ensemble Weights</h2>
-  <ul>{weights_html}</ul>
-  <h2>Exported Files</h2>
-  <ul>
-    <li><a href="./ipa_forecast_{self.target_year}.csv">Quarterly forecast CSV</a></li>
-    <li><a href="./model_metrics.csv">Model metrics CSV</a></li>
-    <li><a href="./feature_importance.csv">Feature importance CSV</a></li>
-    <li><a href="./sensitivity_analysis.csv">Sensitivity analysis CSV</a></li>
-    <li><a href="./run_manifest_{self.target_year}.json">Run manifest JSON</a></li>
-  </ul>
-  <h2>Notes</h2>
-  <ul>
-    <li>Data range: January 2012 to December 2024</li>
-    <li>Method: Walk-forward tuned {model_method}</li>
-    <li>Factors: energy prices, exchange rates, geopolitical events, seasonality</li>
-    <li>Scenario range: based on market volatility and residual distribution</li>
-  </ul>
-  <p>Disclaimer: prediction is for reference only.</p>
+
+  <div class="card">
+    <h2>Summary</h2>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="value">{self.future_predictions['Base'].mean():.2f}</div>
+        <div class="label">Base Mean (TWD/KG)</div>
+      </div>
+      <div class="stat-box" style="background:#dcfce7">
+        <div class="value" style="color:var(--green)">{self.future_predictions['Optimistic'].mean():.2f}</div>
+        <div class="label">Optimistic Mean</div>
+      </div>
+      <div class="stat-box" style="background:#fee2e2">
+        <div class="value" style="color:var(--red)">{self.future_predictions['Pessimistic'].mean():.2f}</div>
+        <div class="label">Pessimistic Mean</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Quarterly Prediction</h2>
+    <table>
+      <tr><th>Quarter</th><th>Base</th><th>Optimistic</th><th>Pessimistic</th></tr>
+      {rows_html}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Visualizations</h2>
+    <img src="../figures/historical_prices.png" alt="Historical Prices">
+    <img src="../figures/prediction_{self.target_year}.png" alt="Prediction {self.target_year}">
+    <img src="../figures/model_comparison.png" alt="Model Comparison">
+  </div>
+
+  <div class="card">
+    <h2>Model Evaluation</h2>
+    {metrics_html}
+  </div>
+
+  <div class="card">
+    <h2>Ensemble Weights</h2>
+    <ul>{weights_html}</ul>
+  </div>
+
+  <div class="card">
+    <h2>Exported Files</h2>
+    <ul>
+      <li><a href="./ipa_forecast_{self.target_year}.csv">Quarterly forecast CSV</a></li>
+      <li><a href="./model_metrics.csv">Model metrics CSV</a></li>
+      <li><a href="./feature_importance.csv">Feature importance CSV</a></li>
+      <li><a href="./sensitivity_analysis.csv">Sensitivity analysis CSV</a></li>
+      <li><a href="./run_manifest_{self.target_year}.json">Run manifest JSON</a></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Notes</h2>
+    <ul>
+      <li>Data range: January 2012 to December 2024</li>
+      <li>Method: Walk-forward tuned {model_method}</li>
+      <li>Factors: energy prices, exchange rates, geopolitical events, seasonality</li>
+      <li>Scenario range: based on market volatility and residual distribution</li>
+    </ul>
+    <p class="disclaimer">Disclaimer: prediction is for reference only.</p>
+  </div>
 </body>
 </html>
 """
@@ -845,7 +946,7 @@ class IPAPricePredictor:
         return outputs
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IPA quarterly price forecasting pipeline.")
     parser.add_argument('--years', nargs='+', type=int, default=[2025, 2026], help='Forecast years, e.g. --years 2025 2026')
     parser.add_argument('--start-date', type=str, default='2012-01-01', help='Historical start date (YYYY-MM-DD)')
@@ -857,11 +958,21 @@ def parse_args():
     parser.add_argument('--no-cache', action='store_true', help='Disable local cache')
     parser.add_argument('--refresh-cache', action='store_true', help='Force refresh market data from source')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--log-level', type=str, default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Logging verbosity level (default: INFO)')
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%H:%M:%S',
+    )
+
     predictor = IPAPricePredictor(
         target_year=min(args.years),
         start_date=args.start_date,

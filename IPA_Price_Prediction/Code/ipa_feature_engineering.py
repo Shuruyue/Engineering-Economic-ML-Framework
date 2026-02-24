@@ -10,11 +10,19 @@ This module is responsible for:
 - Data normalization
 """
 
+import json
+import os
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
+
+# Default path for external IPA price JSON data
+_DEFAULT_IPA_JSON_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'Data', 'ipa_prices.json'
+)
 
 
 class IPAFeatureEngineer:
@@ -39,86 +47,118 @@ class IPAFeatureEngineer:
         if df[target_col].isna().all():
             raise ValueError("Target series contains only NaN values.")
         return df
-        
-    def create_ipa_price_data(self, interpolation='cubic'):
+
+    @staticmethod
+    def _load_price_points_from_json(json_path: str):
         """
-        Create IPA price data based on user-provided chart
-        
-        Data Source: User-provided price trend chart (2012/01 - 2025/12/27)
+        Load IPA price points from external JSON file.
+
+        Parameters
+        ----------
+        json_path : str
+            Absolute path to the JSON file containing price data.
+
+        Returns
+        -------
+        list[tuple[str, float]]
+            List of (date_str, price) tuples.
+        """
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        entries = data.get('prices', [])
+        if not entries:
+            raise ValueError(f"No price entries found in {json_path}")
+        return [(entry['date'], entry['price']) for entry in entries]
+
+    @staticmethod
+    def _get_hardcoded_price_points():
+        """
+        Hardcoded IPA price points used as fallback when JSON file is unavailable.
+
+        Data Source: User-provided price trend chart (2012/01 - 2024/12)
         Unit: TWD (NTD/KG)
-        
-        Sampling Method: One point per week, extracted from chart visualization
         """
-        
-        # Key price points observed from chart (monthly average estimates)
-        # Format: (year-month, price)
-        price_points = [
+        return [
             # 2012
             ('2012-01', 48), ('2012-02', 47), ('2012-03', 47), ('2012-04', 47),
             ('2012-05', 46), ('2012-06', 45), ('2012-07', 45), ('2012-08', 46),
             ('2012-09', 47), ('2012-10', 48), ('2012-11', 48), ('2012-12', 47),
-            
             # 2013
             ('2013-01', 47), ('2013-02', 48), ('2013-03', 49), ('2013-04', 49),
             ('2013-05', 49), ('2013-06', 48), ('2013-07', 47), ('2013-08', 47),
             ('2013-09', 47), ('2013-10', 47), ('2013-11', 47), ('2013-12', 48),
-            
             # 2014
             ('2014-01', 48), ('2014-02', 50), ('2014-03', 52), ('2014-04', 52),
             ('2014-05', 51), ('2014-06', 50), ('2014-07', 48), ('2014-08', 45),
             ('2014-09', 42), ('2014-10', 38), ('2014-11', 35), ('2014-12', 32),
-            
-            # 2015 (Significant decline)
+            # 2015
             ('2015-01', 30), ('2015-02', 28), ('2015-03', 27), ('2015-04', 28),
             ('2015-05', 29), ('2015-06', 30), ('2015-07', 30), ('2015-08', 28),
             ('2015-09', 27), ('2015-10', 27), ('2015-11', 27), ('2015-12', 27),
-            
             # 2016
             ('2016-01', 27), ('2016-02', 27), ('2016-03', 28), ('2016-04', 30),
             ('2016-05', 32), ('2016-06', 33), ('2016-07', 34), ('2016-08', 35),
             ('2016-09', 35), ('2016-10', 36), ('2016-11', 37), ('2016-12', 38),
-            
             # 2017
             ('2017-01', 39), ('2017-02', 40), ('2017-03', 40), ('2017-04', 39),
             ('2017-05', 38), ('2017-06', 37), ('2017-07', 37), ('2017-08', 38),
             ('2017-09', 38), ('2017-10', 39), ('2017-11', 40), ('2017-12', 41),
-            
             # 2018
             ('2018-01', 42), ('2018-02', 42), ('2018-03', 41), ('2018-04', 40),
             ('2018-05', 40), ('2018-06', 39), ('2018-07', 39), ('2018-08', 39),
             ('2018-09', 39), ('2018-10', 40), ('2018-11', 40), ('2018-12', 39),
-            
             # 2019
             ('2019-01', 38), ('2019-02', 37), ('2019-03', 36), ('2019-04', 36),
             ('2019-05', 36), ('2019-06', 35), ('2019-07', 35), ('2019-08', 35),
             ('2019-09', 35), ('2019-10', 35), ('2019-11', 36), ('2019-12', 37),
-            
-            # 2020 (COVID impact)
+            # 2020
             ('2020-01', 38), ('2020-02', 42), ('2020-03', 48), ('2020-04', 50),
             ('2020-05', 48), ('2020-06', 45), ('2020-07', 43), ('2020-08', 42),
             ('2020-09', 42), ('2020-10', 43), ('2020-11', 44), ('2020-12', 45),
-            
-            # 2021 (Price peak)
+            # 2021
             ('2021-01', 48), ('2021-02', 52), ('2021-03', 55), ('2021-04', 56),
             ('2021-05', 55), ('2021-06', 52), ('2021-07', 50), ('2021-08', 48),
             ('2021-09', 47), ('2021-10', 47), ('2021-11', 47), ('2021-12', 46),
-            
             # 2022
             ('2022-01', 46), ('2022-02', 47), ('2022-03', 50), ('2022-04', 52),
             ('2022-05', 50), ('2022-06', 48), ('2022-07', 46), ('2022-08', 44),
             ('2022-09', 43), ('2022-10', 42), ('2022-11', 42), ('2022-12', 42),
-            
             # 2023
             ('2023-01', 43), ('2023-02', 44), ('2023-03', 44), ('2023-04', 43),
             ('2023-05', 42), ('2023-06', 41), ('2023-07', 40), ('2023-08', 40),
             ('2023-09', 40), ('2023-10', 41), ('2023-11', 42), ('2023-12', 43),
-            
             # 2024
             ('2024-01', 44), ('2024-02', 46), ('2024-03', 48), ('2024-04', 50),
             ('2024-05', 52), ('2024-06', 53), ('2024-07', 52), ('2024-08', 50),
             ('2024-09', 48), ('2024-10', 45), ('2024-11', 43), ('2024-12', 41),
         ]
-        
+
+    def create_ipa_price_data(self, interpolation='cubic', json_path=None):
+        """
+        Create IPA price data from external JSON or hardcoded fallback.
+
+        Parameters
+        ----------
+        interpolation : str
+            Interpolation method for weekly resampling ('cubic' or 'linear').
+        json_path : str, optional
+            Path to JSON file. Defaults to ``Data/ipa_prices.json`` next to this module.
+
+        Returns
+        -------
+        pd.DataFrame
+            Weekly IPA price data with DatetimeIndex.
+        """
+        json_path = json_path or _DEFAULT_IPA_JSON_PATH
+
+        # Try loading from external JSON first
+        try:
+            price_points = self._load_price_points_from_json(json_path)
+            print(f"[OK] Loaded IPA prices from: {json_path} ({len(price_points)} entries)")
+        except Exception as e:
+            print(f"[WARN] Failed to load JSON ({e}), using hardcoded fallback")
+            price_points = self._get_hardcoded_price_points()
+
         # Convert to DataFrame
         dates = [pd.to_datetime(p[0]) for p in price_points]
         prices = [p[1] for p in price_points]
@@ -223,6 +263,48 @@ class IPAFeatureEngineer:
         result['Quarter_cos'] = np.cos(2 * np.pi * result['Quarter'] / 4)
         
         return result
+
+    EXOGENOUS_COLS = ['WTI_Price', 'Brent_Price', 'NatGas_Price', 'USD_TWD', 'DXY', 'TWII', 'TSM_Price']
+    INTERACTION_PAIRS = [
+        ('WTI_Price', 'USD_TWD'),
+        ('Brent_Price', 'USD_TWD'),
+        ('NatGas_Price', 'USD_TWD'),
+    ]
+
+    def create_exogenous_features(self, df, windows=None):
+        """
+        Create lag and rolling features for exogenous variables, plus interaction features.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input DataFrame with exogenous columns.
+        windows : list[int], optional
+            Rolling windows. Default [4, 8].
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame augmented with exogenous-derived features.
+        """
+        windows = windows or [4, 8]
+        result = df.copy()
+
+        for col in self.EXOGENOUS_COLS:
+            if col not in result.columns:
+                continue
+            # Lag-1
+            result[f'{col}_lag1'] = result[col].shift(1)
+            # Rolling mean
+            for w in windows:
+                result[f'{col}_ma{w}'] = result[col].rolling(window=w, min_periods=1).mean()
+
+        # Interaction features
+        for col_a, col_b in self.INTERACTION_PAIRS:
+            if col_a in result.columns and col_b in result.columns:
+                result[f'{col_a}_x_{col_b}'] = result[col_a] * result[col_b]
+
+        return result
     
     def resample_to_quarterly(self, df, target_col='IPA_Price_TWD'):
         """
@@ -259,6 +341,10 @@ class IPAFeatureEngineer:
         # 4. Time features
         print("  - Creating time features...")
         df = self.create_time_features(df)
+
+        # 5. Exogenous lag / rolling / interaction features
+        print("  - Creating exogenous derived features...")
+        df = self.create_exogenous_features(df)
         
         # Remove missing values
         df = df.dropna()
