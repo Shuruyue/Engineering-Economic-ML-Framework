@@ -182,7 +182,7 @@ class IPAFeatureEngineer:
         
         return ipa_weekly
     
-    def create_lag_features(self, df, target_col, lags=[1, 2, 3, 4]):
+    def create_lag_features(self, df, target_col, lags=None):
         """
         Create lag features
         
@@ -195,6 +195,7 @@ class IPAFeatureEngineer:
         lags : list
             List of lag periods
         """
+        lags = lags if lags is not None else [1, 2, 3, 4]
         result = df.copy()
         
         for lag in lags:
@@ -202,7 +203,7 @@ class IPAFeatureEngineer:
             
         return result
     
-    def create_rolling_features(self, df, target_col, windows=[4, 8, 12]):
+    def create_rolling_features(self, df, target_col, windows=None):
         """
         Create rolling statistics features
         
@@ -215,6 +216,7 @@ class IPAFeatureEngineer:
         windows : list
             Rolling window sizes (in weeks)
         """
+        windows = windows if windows is not None else [4, 8, 12]
         result = df.copy()
         
         for window in windows:

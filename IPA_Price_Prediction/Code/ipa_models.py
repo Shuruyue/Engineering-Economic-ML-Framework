@@ -3,10 +3,12 @@ IPA Price Prediction Model - Machine Learning Models Module
 ML Models for Isopropyl Alcohol Price Prediction
 
 Models included:
-- ARIMA/SARIMA time series model
-- LSTM neural network
-- XGBoost gradient boosting
-- Ensemble model
+- SARIMA time series model
+- XGBoost / GradientBoosting tree model (with auto-fallback)
+- Ensemble weighting utilities
+
+Optional (not used in main pipeline):
+- LSTM neural network (requires TensorFlow)
 """
 
 import pandas as pd

@@ -1,2 +1,4 @@
 Code/__pycache__/
+Code/tests/__pycache__/
+Code/.pytest_cache/
 *.pyc

@@ -358,7 +358,7 @@ class IPADataCollector:
         # Keep causal filling only to avoid future information leakage
         all_data = self._normalize_output_schema(all_data)
         
-        print(f"\n[OK] Data collection complete!")
+        print("\n[OK] Data collection complete!")
         print(f"  Total records: {len(all_data)}")
         print(f"  Number of columns: {len(all_data.columns)}")
         print(f"  Time range: {all_data.index.min()} ~ {all_data.index.max()}")

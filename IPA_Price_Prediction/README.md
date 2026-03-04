@@ -45,8 +45,11 @@ IPA_Price_Prediction/
 │   ├── requirements.txt
 │   ├── Data/
 │   ├── figures/
-│   └── reports/
+│   ├── reports/
+│   └── tests/
 ├── IPA_Price_Forecasting_Project_Proposal.md
+├── Technical_Optimization_2026.md
+├── text.ipynb
 └── README.md
 ```
 
