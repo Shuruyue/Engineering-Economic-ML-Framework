@@ -7,11 +7,16 @@ This module is responsible for collecting data from multiple sources:
 - Event indicators: Geopolitical and macro shock proxies
 """
 
+from __future__ import annotations
+
+import logging
 import os
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import warnings
-warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
 
 # Data collection packages
 try:
@@ -19,75 +24,77 @@ try:
 except ImportError:
     yf = None
 
-class IPADataCollector:
-    """
-    Isopropyl Alcohol Price Prediction - Data Collector
-    """
+# ---------------------------------------------------------------------------
+# Ticker configuration
+# ---------------------------------------------------------------------------
+TICKER_MAP: Dict[str, str] = {
+    'WTI_Price': 'CL=F',
+    'Brent_Price': 'BZ=F',
+    'NatGas_Price': 'NG=F',
+    'USD_TWD': 'USDTWD=X',
+    'DXY': 'DX-Y.NYB',
+    'TWII': '^TWII',
+    'TSM_Price': 'TSM',
+}
 
-    MARKET_COLUMNS = [
-        'WTI_Price', 'Brent_Price', 'NatGas_Price',
-        'USD_TWD', 'DXY', 'TWII', 'TSM_Price'
-    ]
-    EVENT_COLUMNS = [
-        'COVID19', 'Ukraine_War', 'RedSea_Crisis',
-        'US_China_Trade', 'Geopolitical_Risk'
-    ]
-    REQUIRED_CACHE_COLUMNS = MARKET_COLUMNS + EVENT_COLUMNS
-    
+# ---------------------------------------------------------------------------
+# Event date ranges (start, end or None for ongoing)
+# ---------------------------------------------------------------------------
+EVENT_RANGES: Dict[str, Tuple[str, Optional[str]]] = {
+    'COVID19': ('2020-01-01', '2023-05-31'),
+    'Ukraine_War': ('2022-02-24', None),
+    'RedSea_Crisis': ('2023-11-01', None),
+    'US_China_Trade': ('2018-03-01', None),
+}
+
+
+class IPADataCollector:
+    """Isopropyl Alcohol Price Prediction - Data Collector."""
+
+    MARKET_COLUMNS: List[str] = list(TICKER_MAP.keys())
+    EVENT_COLUMNS: List[str] = list(EVENT_RANGES.keys()) + ['Geopolitical_Risk']
+    REQUIRED_CACHE_COLUMNS: List[str] = MARKET_COLUMNS + EVENT_COLUMNS
+
     def __init__(
         self,
-        start_date='2012-01-01',
-        end_date='2024-12-31',
-        cache_dir='Data',
-        use_cache=True,
-        refresh_cache=False
-    ):
-        """
-        Initialize data collector
-        
-        Parameters:
-        -----------
-        start_date : str
-            Start date (YYYY-MM-DD)
-        end_date : str
-            End date (YYYY-MM-DD)
-        cache_dir : str
-            Local cache directory for merged market data
-        use_cache : bool
-            Whether to load/store cache
-        refresh_cache : bool
-            Whether to force refresh from remote source
-        """
+        start_date: str = '2012-01-01',
+        end_date: str = '2024-12-31',
+        cache_dir: str = 'Data',
+        use_cache: bool = True,
+        refresh_cache: bool = False,
+    ) -> None:
         self.start_date = start_date
         self.end_date = end_date
         self.cache_dir = cache_dir
         self.use_cache = use_cache
         self.refresh_cache = refresh_cache
-        self.data = {}
+        self.data: Dict[str, pd.DataFrame] = {}
 
         safe_start = self.start_date.replace('-', '')
         safe_end = self.end_date.replace('-', '')
         self.cache_file = os.path.join(
             self.cache_dir,
-            f"market_data_{safe_start}_{safe_end}.csv"
+            f"market_data_{safe_start}_{safe_end}.csv",
         )
 
-    def _validate_cached_data(self, df):
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
+    def _validate_cached_data(self, df: pd.DataFrame) -> Tuple[bool, str]:
         if df is None or df.empty:
             return False, "cached data is empty"
         if not isinstance(df.index, pd.DatetimeIndex):
             return False, "cache index is not DatetimeIndex"
 
-        missing_columns = [col for col in self.REQUIRED_CACHE_COLUMNS if col not in df.columns]
-        if missing_columns:
-            return False, f"missing columns: {missing_columns}"
+        missing = [c for c in self.REQUIRED_CACHE_COLUMNS if c not in df.columns]
+        if missing:
+            return False, f"missing columns: {missing}"
 
         return True, "ok"
 
-    def _normalize_output_schema(self, df):
-        """
-        Ensure merged output keeps stable schema for downstream steps.
-        """
+    def _normalize_output_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure merged output keeps stable schema for downstream steps."""
         result = df.copy()
         for col in self.REQUIRED_CACHE_COLUMNS:
             if col not in result.columns:
@@ -99,9 +106,13 @@ class IPADataCollector:
         result = result.sort_index().ffill()
         return result
 
-    def _download_close_price(self, ticker, column_name):
-        """
-        Download close price series and normalize output schema.
+    # ------------------------------------------------------------------
+    # Download helpers
+    # ------------------------------------------------------------------
+
+    def _download_close_price(self, ticker: str, column_name: str) -> Optional[pd.DataFrame]:
+        """Download close price series from Yahoo Finance.
+
         Handles both normal and MultiIndex yfinance responses.
         """
         if yf is None:
@@ -111,7 +122,7 @@ class IPADataCollector:
             ticker,
             start=self.start_date,
             end=self.end_date,
-            progress=False
+            progress=False,
         )
         if raw is None or raw.empty:
             raise ValueError(f"No data returned for {ticker}")
@@ -122,10 +133,7 @@ class IPADataCollector:
                 series = raw.iloc[:, 0]
             else:
                 selected = raw[close_cols[0]]
-                if isinstance(selected, pd.DataFrame):
-                    series = selected.iloc[:, 0]
-                else:
-                    series = selected
+                series = selected.iloc[:, 0] if isinstance(selected, pd.DataFrame) else selected
         else:
             close_col = 'Close' if 'Close' in raw.columns else raw.columns[0]
             series = raw[close_col]
@@ -134,175 +142,96 @@ class IPADataCollector:
         result.index = pd.to_datetime(result.index)
         result = result.loc[~result.index.duplicated(keep='first')].sort_index()
         return result
-        
-    def fetch_crude_oil_prices(self):
-        """
-        Fetch crude oil prices (WTI and Brent)
-        
-        WTI: CL=F (NYMEX WTI Crude Oil Futures)
-        Brent: BZ=F (Brent Crude Oil Futures)
-        """
-        print("Fetching crude oil prices...")
+
+    def _fetch_tickers(self, tickers: Dict[str, str], label: str) -> Optional[pd.DataFrame]:
+        """Fetch a group of tickers and merge into one DataFrame."""
+        logger.info("Fetching %s...", label)
+        print(f"Fetching {label}...")
 
         if yf is None:
-            print("  [WARN] yfinance unavailable, crude oil prices skipped")
+            print(f"  [WARN] yfinance unavailable, {label} skipped")
             return None
-        
+
         try:
-            # WTI crude oil
-            wti = self._download_close_price('CL=F', 'WTI_Price')
-            
-            # Brent crude oil
-            brent = self._download_close_price('BZ=F', 'Brent_Price')
-
-            candidates = [df for df in [wti, brent] if df is not None and not df.empty]
-            if not candidates:
-                raise ValueError("No crude oil data returned")
-
-            # Merge
-            oil_prices = pd.concat(candidates, axis=1)
-            self.data['crude_oil'] = oil_prices
-            print(f"  [OK] Crude oil prices: {len(oil_prices)} records")
-            return oil_prices
-            
+            frames = []
+            for col_name, ticker in tickers.items():
+                df = self._download_close_price(ticker, col_name)
+                if df is not None and not df.empty:
+                    frames.append(df)
+            if not frames:
+                raise ValueError(f"No data returned for {label}")
+            merged = pd.concat(frames, axis=1)
+            self.data[label] = merged
+            print(f"  [OK] {label}: {len(merged)} records")
+            return merged
         except Exception as e:
-            print(f"  [ERROR] Failed to fetch crude oil prices: {e}")
+            logger.warning("Failed to fetch %s: %s", label, e)
+            print(f"  [ERROR] Failed to fetch {label}: {e}")
             return None
-    
-    def fetch_natural_gas_prices(self):
-        """
-        Fetch natural gas prices
-        
-        NG=F: Henry Hub Natural Gas Futures
-        """
-        print("Fetching natural gas prices...")
 
-        if yf is None:
-            print("  [WARN] yfinance unavailable, natural gas prices skipped")
-            return None
-        
-        try:
-            ng = self._download_close_price('NG=F', 'NatGas_Price')
-            if ng is None or ng.empty:
-                raise ValueError("No natural gas data returned")
-            self.data['natural_gas'] = ng
-            print(f"  [OK] Natural gas prices: {len(ng)} records")
-            return ng
-            
-        except Exception as e:
-            print(f"  [ERROR] Failed to fetch natural gas prices: {e}")
-            return None
-    
-    def fetch_exchange_rates(self):
-        """
-        Fetch exchange rate data
-        
-        USDTWD=X: USD/TWD
-        DX-Y.NYB: US Dollar Index (DXY)
-        """
-        print("Fetching exchange rate data...")
+    # ------------------------------------------------------------------
+    # Public fetch methods
+    # ------------------------------------------------------------------
 
-        if yf is None:
-            print("  [WARN] yfinance unavailable, exchange rate data skipped")
-            return None
-        
-        try:
-            # USD/TWD
-            usdtwd = self._download_close_price('USDTWD=X', 'USD_TWD')
-            
-            # DXY US Dollar Index
-            dxy = self._download_close_price('DX-Y.NYB', 'DXY')
-            
-            candidates = [df for df in [usdtwd, dxy] if df is not None and not df.empty]
-            if not candidates:
-                raise ValueError("No exchange rate data returned")
+    def fetch_crude_oil_prices(self) -> Optional[pd.DataFrame]:
+        """Fetch crude oil prices (WTI and Brent)."""
+        return self._fetch_tickers(
+            {'WTI_Price': TICKER_MAP['WTI_Price'], 'Brent_Price': TICKER_MAP['Brent_Price']},
+            'crude oil prices',
+        )
 
-            # Merge
-            fx_rates = pd.concat(candidates, axis=1)
-            self.data['exchange_rates'] = fx_rates
-            print(f"  [OK] Exchange rate data: {len(fx_rates)} records")
-            return fx_rates
-            
-        except Exception as e:
-            print(f"  [ERROR] Failed to fetch exchange rate data: {e}")
-            return None
-    
-    def fetch_stock_indices(self):
-        """
-        Fetch related stock indices
-        
-        ^TWII: Taiwan Weighted Index
-        TSM: TSMC ADR (Semiconductor proxy indicator)
-        """
-        print("Fetching stock indices...")
+    def fetch_natural_gas_prices(self) -> Optional[pd.DataFrame]:
+        """Fetch natural gas prices (Henry Hub)."""
+        return self._fetch_tickers(
+            {'NatGas_Price': TICKER_MAP['NatGas_Price']},
+            'natural gas prices',
+        )
 
-        if yf is None:
-            print("  [WARN] yfinance unavailable, stock indices skipped")
-            return None
-        
-        try:
-            # Taiwan Weighted Index
-            twii = self._download_close_price('^TWII', 'TWII')
-            
-            # TSMC ADR (as semiconductor industry proxy)
-            tsm = self._download_close_price('TSM', 'TSM_Price')
-            
-            candidates = [df for df in [twii, tsm] if df is not None and not df.empty]
-            if not candidates:
-                raise ValueError("No stock index data returned")
+    def fetch_exchange_rates(self) -> Optional[pd.DataFrame]:
+        """Fetch exchange rate data (USD/TWD, DXY)."""
+        return self._fetch_tickers(
+            {'USD_TWD': TICKER_MAP['USD_TWD'], 'DXY': TICKER_MAP['DXY']},
+            'exchange rate data',
+        )
 
-            indices = pd.concat(candidates, axis=1)
-            self.data['stock_indices'] = indices
-            print(f"  [OK] Stock indices: {len(indices)} records")
-            return indices
-            
-        except Exception as e:
-            print(f"  [ERROR] Failed to fetch stock indices: {e}")
-            return None
-    
-    def create_event_indicators(self):
-        """
-        Create geopolitical and major event indicators
-        
-        Event encoding:
-        - COVID-19 pandemic (2020/01 - 2023/05)
-        - Russia-Ukraine War (2022/02 - ongoing)
-        - Red Sea Crisis (2023/11 - ongoing)
-        - US-China Trade War (2018/03 - ongoing)
+    def fetch_stock_indices(self) -> Optional[pd.DataFrame]:
+        """Fetch stock indices (^TWII, TSM)."""
+        return self._fetch_tickers(
+            {'TWII': TICKER_MAP['TWII'], 'TSM_Price': TICKER_MAP['TSM_Price']},
+            'stock indices',
+        )
+
+    def create_event_indicators(self) -> pd.DataFrame:
+        """Create geopolitical and major event indicators.
+
+        Events are configured via the module-level ``EVENT_RANGES`` dict.
         """
         print("Creating event indicators...")
-        
-        # Create date range
+
         date_range = pd.date_range(start=self.start_date, end=self.end_date, freq='D')
         events = pd.DataFrame(index=date_range)
-        
-        # COVID-19 pandemic
-        events['COVID19'] = 0
-        events.loc['2020-01-01':'2023-05-31', 'COVID19'] = 1
-        
-        # Russia-Ukraine War
-        events['Ukraine_War'] = 0
-        events.loc['2022-02-24':, 'Ukraine_War'] = 1
-        
-        # Red Sea Crisis
-        events['RedSea_Crisis'] = 0
-        events.loc['2023-11-01':, 'RedSea_Crisis'] = 1
-        
-        # US-China Trade War
-        events['US_China_Trade'] = 0
-        events.loc['2018-03-01':, 'US_China_Trade'] = 1
-        
-        # Global financial risk indicator (simplified)
-        events['Geopolitical_Risk'] = events['COVID19'] + events['Ukraine_War'] + events['RedSea_Crisis']
-        
+
+        for event_name, (start, end) in EVENT_RANGES.items():
+            events[event_name] = 0
+            if end is not None:
+                events.loc[start:end, event_name] = 1
+            else:
+                events.loc[start:, event_name] = 1
+
+        # Composite geopolitical risk indicator
+        risk_components = ['COVID19', 'Ukraine_War', 'RedSea_Crisis']
+        events['Geopolitical_Risk'] = events[[c for c in risk_components if c in events.columns]].sum(axis=1)
+
         self.data['events'] = events
         print(f"  [OK] Event indicators: {len(events)} records")
         return events
-    
-    def collect_all_data(self):
-        """
-        Collect all data and merge into a single DataFrame
-        """
+
+    # ------------------------------------------------------------------
+    # Collect & merge
+    # ------------------------------------------------------------------
+
+    def collect_all_data(self) -> pd.DataFrame:
+        """Collect all data and merge into a single DataFrame."""
         if self.use_cache and not self.refresh_cache and os.path.exists(self.cache_file):
             try:
                 cached = pd.read_csv(self.cache_file, parse_dates=['Date'], index_col='Date')
@@ -319,45 +248,33 @@ class IPADataCollector:
                 print(f"  Time range: {cached.index.min()} ~ {cached.index.max()}")
                 return self._normalize_output_schema(cached)
             except Exception as e:
+                logger.warning("Failed to load cache, fallback to remote: %s", e)
                 print(f"[WARN] Failed to load cache, fallback to remote collection: {e}")
 
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("Starting to collect all data...")
-        print("="*50 + "\n")
-        
-        # Collect various data types
+        print("=" * 50 + "\n")
+
         self.fetch_crude_oil_prices()
         self.fetch_natural_gas_prices()
         self.fetch_exchange_rates()
         self.fetch_stock_indices()
         self.create_event_indicators()
-        
-        # Merge all data
+
         print("\nMerging data...")
-        
-        dfs_to_merge = []
-        for name, df in self.data.items():
-            if df is not None and not df.empty:
-                # Ensure index is DatetimeIndex
-                if not isinstance(df.index, pd.DatetimeIndex):
-                    continue
-                # Remove duplicate indices
-                df = df.loc[~df.index.duplicated(keep='first')]
-                dfs_to_merge.append(df)
-        
+        dfs_to_merge: List[pd.DataFrame] = []
+        for _name, df in self.data.items():
+            if df is not None and not df.empty and isinstance(df.index, pd.DatetimeIndex):
+                dfs_to_merge.append(df.loc[~df.index.duplicated(keep='first')])
+
         if not dfs_to_merge:
             print("  [ERROR] No available data")
             return pd.DataFrame()
-        
-        # Use concat to merge
+
         all_data = pd.concat(dfs_to_merge, axis=1)
-        
-        # Remove duplicate columns
         all_data = all_data.loc[:, ~all_data.columns.duplicated()]
-        
-        # Keep causal filling only to avoid future information leakage
         all_data = self._normalize_output_schema(all_data)
-        
+
         print("\n[OK] Data collection complete!")
         print(f"  Total records: {len(all_data)}")
         print(f"  Number of columns: {len(all_data.columns)}")
@@ -369,77 +286,51 @@ class IPADataCollector:
                 all_data.to_csv(self.cache_file, index_label='Date')
                 print(f"[OK] Cache saved: {self.cache_file}")
             except Exception as e:
+                logger.warning("Failed to write cache: %s", e)
                 print(f"[WARN] Failed to write cache: {e}")
-        
+
         return all_data
-    
-    def resample_to_quarterly(self, df):
-        """
-        Convert daily frequency data to quarterly data
-        
-        Parameters:
-        -----------
-        df : DataFrame
-            Daily frequency data
-            
-        Returns:
-        --------
-        DataFrame
-            Quarterly data (Q1, Q2, Q3, Q4)
-        """
+
+    def resample_to_quarterly(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convert daily frequency data to quarterly averages."""
         print("\nConverting to quarterly data...")
-        
-        # Quarterly average
+
         quarterly = df.resample('QE').mean()
-        
-        # Add quarter labels
         quarterly['Year'] = quarterly.index.year
         quarterly['Quarter'] = quarterly.index.quarter
         quarterly['Quarter_Label'] = quarterly.apply(
-            lambda x: f"{int(x['Year'])}Q{int(x['Quarter'])}", axis=1
+            lambda x: f"{int(x['Year'])}Q{int(x['Quarter'])}", axis=1,
         )
-        
         print(f"[OK] Quarterly data: {len(quarterly)} records")
         return quarterly
-    
-    def save_data(self, df, filename):
-        """
-        Save data to CSV
-        """
+
+    def save_data(self, df: pd.DataFrame, filename: str) -> None:
+        """Save data to CSV."""
         df.to_csv(filename)
         print(f"[OK] Data saved to: {filename}")
 
 
-def load_ipa_prices_from_csv(filepath):
+def load_ipa_prices_from_csv(filepath: str) -> pd.DataFrame:
+    """Load IPA price data from CSV.
+
+    Expected format: Date (index) + Price column (TWD/KG).
     """
-    Load IPA price data from CSV
-    
-    Expected format:
-    - Date: Date column
-    - Price: Price column (TWD/KG)
-    """
-    df = pd.read_csv(filepath, parse_dates=['Date'], index_col='Date')
-    return df
+    return pd.read_csv(filepath, parse_dates=['Date'], index_col='Date')
 
 
 # Main test program
 if __name__ == "__main__":
-    # Initialize collector
     collector = IPADataCollector(
         start_date='2012-01-01',
-        end_date='2024-12-31'
+        end_date='2024-12-31',
     )
-    
-    # Collect all data
     data = collector.collect_all_data()
-    
-    # Display data summary
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("Data Summary")
-    print("="*50)
+    print("=" * 50)
     print(data.describe())
-    
-    # Convert to quarterly data
+
     quarterly_data = collector.resample_to_quarterly(data)
     print("\nQuarterly Data:")
     print(quarterly_data.tail(10))

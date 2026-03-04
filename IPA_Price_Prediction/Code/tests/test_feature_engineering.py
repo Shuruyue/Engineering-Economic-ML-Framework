@@ -5,7 +5,6 @@ Unit tests for IPA Feature Engineering Module
 import json
 import os
 import sys
-import tempfile
 
 import numpy as np
 import pandas as pd
@@ -195,6 +194,29 @@ class TestTimeFeatures:
 
 
 # ---------------------------------------------------------------------------
+# Exogenous features
+# ---------------------------------------------------------------------------
+
+class TestExogenousFeatures:
+    def test_exogenous_lag_and_rolling_created(self, fe):
+        dates = pd.date_range('2020-01-05', periods=20, freq='W-SUN')
+        df = pd.DataFrame({
+            'IPA_Price_TWD': np.linspace(40, 50, 20),
+            'WTI_Price': np.linspace(60, 80, 20),
+            'USD_TWD': np.linspace(29, 31, 20),
+        }, index=dates)
+        result = fe.create_exogenous_features(df, windows=[4])
+        assert 'WTI_Price_lag1' in result.columns
+        assert 'WTI_Price_ma4' in result.columns
+        assert 'WTI_Price_x_USD_TWD' in result.columns
+
+    def test_missing_exogenous_cols_skipped(self, fe, sample_weekly_df):
+        result = fe.create_exogenous_features(sample_weekly_df, windows=[4])
+        # Should not fail even though no exogenous columns exist
+        assert len(result) == len(sample_weekly_df)
+
+
+# ---------------------------------------------------------------------------
 # Full pipeline
 # ---------------------------------------------------------------------------
 
@@ -225,3 +247,24 @@ class TestPrepareFeaturesFullPipeline:
         assert len(featured) > 0
         assert 'IPA_Price_TWD_lag1' in featured.columns
         assert 'WTI_Price_lag1' in featured.columns
+
+
+# ---------------------------------------------------------------------------
+# Scaling
+# ---------------------------------------------------------------------------
+
+class TestScaling:
+    def test_scale_and_inverse(self, fe):
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        y = pd.Series([10.0, 20.0, 30.0])
+        X_scaled, y_scaled = fe.scale_features(X, y, fit=True)
+        assert X_scaled.shape == X.shape
+        assert y_scaled is not None
+        y_inv = fe.inverse_scale_target(y_scaled)
+        np.testing.assert_allclose(y_inv, y.values, atol=1e-6)
+
+    def test_scale_without_target(self, fe):
+        X = np.array([[1.0, 2.0], [3.0, 4.0]])
+        X_scaled, y_out = fe.scale_features(X, None, fit=True)
+        assert X_scaled.shape == X.shape
+        assert y_out is None

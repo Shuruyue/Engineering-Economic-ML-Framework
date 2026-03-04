@@ -3,7 +3,6 @@ Unit tests for IPA Price Prediction main module (IPAPricePredictor utilities)
 """
 
 import os
-import re
 import sys
 
 import numpy as np
@@ -12,7 +11,11 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from ipa_price_prediction import IPAPricePredictor
+from ipa_price_prediction import (
+    ENSEMBLE_ELIGIBILITY_RATIO,
+    ENSEMBLE_WEIGHT_POWER,
+    IPAPricePredictor,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -22,8 +25,7 @@ from ipa_price_prediction import IPAPricePredictor
 @pytest.fixture
 def predictor():
     """Create a predictor without running data loading."""
-    p = IPAPricePredictor(target_year=2025, random_seed=42)
-    return p
+    return IPAPricePredictor(target_year=2025, random_seed=42)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,18 @@ class TestSafePctChange:
     def test_zero_base(self):
         values = np.array([0.0, 1.0])
         result = IPAPricePredictor._safe_pct_change(values, periods=1)
+        assert result == 0.0
+
+
+class TestDirectionAccuracy:
+    def test_perfect_direction(self):
+        y_true = np.array([40.0, 42.0, 44.0, 46.0])
+        y_pred = np.array([39.0, 41.0, 43.0, 45.0])
+        result = IPAPricePredictor._direction_accuracy(y_true, y_pred)
+        assert result == pytest.approx(100.0)
+
+    def test_single_value(self):
+        result = IPAPricePredictor._direction_accuracy(np.array([40.0]), np.array([41.0]))
         assert result == 0.0
 
 
@@ -148,6 +162,15 @@ class TestDeriveEnsembleWeights:
         ]
         predictor._derive_ensemble_weights()
         assert predictor.ensemble_weights['sarima'] > predictor.ensemble_weights['xgboost']
+
+    def test_eligibility_filtering(self, predictor):
+        """Model with error > ELIGIBILITY_RATIO * best should be excluded."""
+        predictor.results = [
+            {'ModelKey': 'xgboost', 'MAPE': 1.0},
+            {'ModelKey': 'sarima', 'MAPE': 1.0 * ENSEMBLE_ELIGIBILITY_RATIO + 1.0},
+        ]
+        predictor._derive_ensemble_weights()
+        assert 'sarima' not in predictor.ensemble_weights
 
 
 class TestGetModelBlendWeights:
@@ -226,6 +249,26 @@ class TestBuildFutureFeatureRow:
         assert row['WTI_Price_ma2'] == pytest.approx((72.0 + 75.0) / 2)
         assert row['WTI_Price_x_USD_TWD'] == pytest.approx(75.0 * 31.5)
 
+    def test_rolling_stats_computed(self, predictor):
+        """Test that rolling std/max/min features are correctly computed."""
+        predictor.feature_cols = [
+            'IPA_Price_TWD_lag1', 'IPA_Price_TWD_ma2',
+            'IPA_Price_TWD_std2', 'IPA_Price_TWD_max2', 'IPA_Price_TWD_min2',
+            'Year', 'Quarter',
+        ]
+        predictor.exogenous_feature_cols = []
+        predictor.base_exogenous_feature_cols = []
+
+        template = pd.Series([0.0] * len(predictor.feature_cols), index=predictor.feature_cols, dtype=float)
+        target_history = [40.0, 42.0, 44.0, 46.0]
+        future_period = pd.Period('2025Q1', freq='Q')
+
+        row = predictor._build_future_feature_row(future_period, target_history, template)
+        assert row['IPA_Price_TWD_ma2'] == pytest.approx(np.mean([44.0, 46.0]))
+        assert row['IPA_Price_TWD_std2'] == pytest.approx(np.std([44.0, 46.0], ddof=0))
+        assert row['IPA_Price_TWD_max2'] == pytest.approx(46.0)
+        assert row['IPA_Price_TWD_min2'] == pytest.approx(44.0)
+
 
 # ---------------------------------------------------------------------------
 # JSON serialization utility
@@ -247,3 +290,18 @@ class TestJsonCompatible:
         ts = pd.Timestamp('2025-01-01')
         result = IPAPricePredictor._json_compatible(ts)
         assert isinstance(result, str)
+
+    def test_passthrough_string(self):
+        assert IPAPricePredictor._json_compatible("hello") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+class TestModuleConstants:
+    def test_eligibility_ratio_positive(self):
+        assert ENSEMBLE_ELIGIBILITY_RATIO > 1.0
+
+    def test_weight_power_positive(self):
+        assert ENSEMBLE_WEIGHT_POWER > 0

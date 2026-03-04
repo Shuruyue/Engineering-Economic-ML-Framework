@@ -102,6 +102,17 @@ class TestXGBoostModel:
         # MAPE should be reasonable (< 20%) for this easy synthetic data
         assert result['MAPE'] < 20.0
 
+    def test_predict_before_fit_raises(self):
+        model = XGBoostModel()
+        with pytest.raises(Exception):
+            model.predict(np.array([[1, 2, 3]]))
+
+    def test_backend_name_set(self, synthetic_data):
+        X_train, y_train, _, _ = synthetic_data
+        model = XGBoostModel(n_estimators=10)
+        model.fit(X_train, y_train)
+        assert model.backend_name in ('xgboost', 'gradient_boosting')
+
 
 # ---------------------------------------------------------------------------
 # ARIMAModel
@@ -125,3 +136,8 @@ class TestARIMAModel:
         model.fit(y)
         fitted = model.get_fitted_values()
         assert len(fitted) == len(y)
+
+    def test_predict_before_fit_raises(self):
+        model = ARIMAModel()
+        with pytest.raises(ValueError, match="not trained"):
+            model.predict(4)
