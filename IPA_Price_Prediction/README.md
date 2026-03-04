@@ -1,39 +1,39 @@
-# IPA Price Prediction (異丙醇季度價格預測)
+# IPA Price Prediction (Quarterly IPA Price Forecasting)
 
-本子專案為工程經濟課程的 IPA (Isopropyl Alcohol) 價格預測最終版，聚焦「可重現、可交付、可維護」。
+This sub-project is the final version of the IPA (Isopropyl Alcohol) price prediction for the Engineering Economics course, focusing on **reproducibility, deliverability, and maintainability**.
 
-## 最終優化重點 (封版)
+## Final Optimization Highlights (Sealed)
 
-1. 資料蒐集穩定化: 快取欄位驗證、輸出 schema 標準化、缺依賴時可降級執行。  
-2. 特徵工程重構: 改為「季度先行」特徵管線，避免先週後季造成 lag/rolling 語意偏移。  
-3. 回測與集成強化: XGBoost / SARIMA 均採 walk-forward backtest 調參，ensemble 以 CV 誤差加權且自動剔除弱模型。  
-4. 遞迴預測一致化: 未來期會同步重算外生衍生特徵（lag/rolling/interaction），避免沿用過時模板值。  
-5. 交付工件補齊: HTML、圖表、CSV、JSON manifest、多年度總表與 walk-forward 回測明細一次產出。  
-6. 文件封版: 執行參數、輸出定義、維護邊界明確化。  
+1. Data collection stabilization: cache field validation, output schema standardization, graceful degradation when dependencies are missing.
+2. Feature engineering refactoring: switched to a "quarterly-first" feature pipeline to prevent lag/rolling semantic drift from weekly-then-quarterly averaging.
+3. Backtesting and ensemble strengthening: both XGBoost and SARIMA use walk-forward backtest for hyperparameter tuning; ensemble uses inverse CV error weighting with automatic weak model suppression.
+4. Recursive prediction consistency: future periods recompute exogenous derived features (lag/rolling/interaction) at each step, avoiding stale template values.
+5. Deliverable artifacts: HTML, charts, CSV, JSON manifest, multi-year summary, and walk-forward backtest details are all generated in one run.
+6. Documentation sealed: execution parameters, output definitions, and maintenance boundaries are clearly defined.
 
-## 專案目標
+## Project Goals
 
-- 使用歷史資料區間 `2012-01-01` 到 `2024-12-31`。
-- 預測 `2025` 與 `2026` 年 Q1-Q4 IPA 價格 (TWD/KG)。
-- 融合能源、匯率、股市代理變數、地緣事件與季節性特徵。
+- Use historical data from `2012-01-01` to `2024-12-31`.
+- Forecast `2025` and `2026` Q1–Q4 IPA prices (TWD/KG).
+- Incorporate energy prices, exchange rates, stock market proxies, geopolitical events, and seasonal features.
 
-## 模型流程摘要
+## Model Pipeline Summary
 
-- 資料來源:
-  - 目標值: 由圖表還原之 IPA 價格序列
-  - 外生變數: Yahoo Finance + 事件指標
-- 特徵工程:
+- Data sources:
+  - Target variable: IPA price series reconstructed from charts
+  - Exogenous variables: Yahoo Finance + event indicators
+- Feature engineering:
   - lag / rolling / pct change / time seasonal encoding
-- 模型:
-  - Walk-forward 調參樹模型 (`XGBoost`，若缺套件自動降級 `GradientBoosting`)
-  - Walk-forward 調參 `SARIMA`
-  - 依 CV `MAPE` 反向加權（平方）ensemble，並自動抑制高誤差模型
-- 預測:
-  - 遞迴式逐季推進
-  - 外生變數阻尼漂移投影
-  - 波動 + 殘差導出的自適應區間
+- Models:
+  - Walk-forward tuned tree model (`XGBoost`, auto-fallback to `GradientBoosting` if unavailable)
+  - Walk-forward tuned `SARIMA`
+  - Inverse CV `MAPE` squared weighting for ensemble, with automatic weak model suppression
+- Forecasting:
+  - Recursive quarter-by-quarter prediction
+  - Exogenous variable damped drift projection
+  - Adaptive confidence intervals derived from volatility + residual distribution
 
-## 目錄結構
+## Directory Structure
 
 ```text
 IPA_Price_Prediction/
@@ -53,7 +53,7 @@ IPA_Price_Prediction/
 └── README.md
 ```
 
-## 快速開始
+## Quick Start
 
 ```bash
 cd IPA_Price_Prediction/Code
@@ -61,22 +61,22 @@ pip install -r requirements.txt
 python ipa_price_prediction.py --years 2025 2026
 ```
 
-常用參數:
+Common parameters:
 
 ```bash
-# 只預測單一年份
+# Forecast a single year
 python ipa_price_prediction.py --years 2025
 
-# 強制重新抓取外部資料 (忽略快取)
+# Force refresh external data (ignore cache)
 python ipa_price_prediction.py --years 2025 2026 --refresh-cache
 
-# 自訂輸出目錄
+# Custom output directories
 python ipa_price_prediction.py --years 2025 2026 --figures-dir figures --reports-dir reports
 ```
 
-## 輸出工件
+## Output Artifacts
 
-執行後會產生:
+After execution, the following files are generated:
 
 - `Code/figures/`
   - `historical_prices.png`
@@ -97,14 +97,14 @@ python ipa_price_prediction.py --years 2025 2026 --figures-dir figures --reports
   - `run_manifest_2025.json`
   - `run_manifest_2026.json`
 
-## 維護模式建議
+## Maintenance Recommendations
 
-本專案已進入最終版，後續建議僅做必要維護:
+This project has entered its final version. Only essential maintenance is recommended going forward:
 
-- 套件/API 相容性修正
-- 快取資料刷新
-- 報告年份延伸
+- Package/API compatibility fixes
+- Cache data refresh
+- Report year extension
 
-補充技術說明:
+Supplementary technical notes:
 
-- `Technical_Optimization_2026.md`: 三輪優化內容、驗證結果與論文依據。
+- `Technical_Optimization_2026.md`: Three rounds of optimization details, validation results, and research references.

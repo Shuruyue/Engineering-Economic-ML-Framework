@@ -1,177 +1,177 @@
-# IPA 價格預測專案優化企畫書
+# IPA Price Prediction Project Optimization Proposal
 
-文件版本: v1.1  
-更新日期: 2026-02-22  
-適用期間: 2025Q1-2026Q4 預測與課堂成果展示
+Document version: v1.1  
+Updated: 2026-02-22  
+Applicable period: 2025Q1–2026Q4 forecasting and course deliverable
 
-## 1. 專案定位與目標
+## 1. Project Positioning and Goals
 
-本專案定位為工程經濟課程之 IPA (Isopropyl Alcohol) 價格預測應用案例，重點是可解釋、可重現、可交付。
+This project serves as an IPA (Isopropyl Alcohol) price prediction application for the Engineering Economics course, emphasizing **interpretability, reproducibility, and deliverability**.
 
-主要目標:
-- 建立可重現的季度預測流程，輸出 2025 與 2026 年 Q1-Q4 價格區間。
-- 納入多因子影響，反映成本、匯率、需求與事件衝擊。
-- 提供圖表與 HTML 報告，支援課程展示與報告歸檔。
+Key objectives:
+- Build a reproducible quarterly forecasting pipeline that outputs 2025 and 2026 Q1–Q4 price ranges.
+- Incorporate multi-factor influences reflecting cost, exchange rates, demand, and event shocks.
+- Provide charts and HTML reports to support course presentations and report archiving.
 
-## 2. 問題定義
+## 2. Problem Definition
 
-預測標的:
-- 目標變數: IPA 單價 (TWD/KG)
-- 頻率: 季度
-- 預測步長: 每次 4 季 (Q1-Q4)
+Prediction target:
+- Target variable: IPA unit price (TWD/KG)
+- Frequency: Quarterly
+- Forecast horizon: 4 quarters per run (Q1–Q4)
 
-決策用途:
-- 採購預算估算
-- 成本敏感度分析
-- 基準/樂觀/保守情境比較
+Decision use cases:
+- Procurement budget estimation
+- Cost sensitivity analysis
+- Baseline / optimistic / pessimistic scenario comparison
 
-## 3. 資料策略與來源
+## 3. Data Strategy and Sources
 
-### 3.1 已落地資料
+### 3.1 Available Data
 
-1. 目標序列:
-- 來源: 既有圖表還原的 IPA 序列 (2012-01 至 2024-12)
-- 頻率: 週資料，後續彙整為季資料
+1. Target series:
+   - Source: IPA price series reconstructed from existing charts (2012-01 to 2024-12)
+   - Frequency: Weekly data, subsequently aggregated to quarterly
 
-2. 外生變數:
-- Yahoo Finance: `CL=F`, `BZ=F`, `NG=F`, `USDTWD=X`, `DX-Y.NYB`, `^TWII`, `TSM`
-- 事件指標: COVID-19、俄烏戰爭、紅海危機、中美貿易戰
+2. Exogenous variables:
+   - Yahoo Finance: `CL=F`, `BZ=F`, `NG=F`, `USDTWD=X`, `DX-Y.NYB`, `^TWII`, `TSM`
+   - Event indicators: COVID-19, Russia-Ukraine War, Red Sea Crisis, US-China Trade War
 
-### 3.2 資料治理
+### 3.2 Data Governance
 
-- 型別/欄位完整性檢查
-- 時間索引去重與排序
-- 僅前向填補，避免 look-ahead bias
-- 異常值分位裁切 (1%/99%)
-- 本地快取以提高穩定性與重現性 (`Code/Data/market_data_*.csv`)
+- Type/field integrity checks
+- Time index deduplication and sorting
+- Forward-fill only, to avoid look-ahead bias
+- Outlier quantile clipping (1%/99%)
+- Local cache for stability and reproducibility (`Code/Data/market_data_*.csv`)
 
-## 4. 特徵工程設計
+## 4. Feature Engineering Design
 
-核心特徵:
-- 自回歸: lag1-lag4
-- 滾動統計: MA/STD/MAX/MIN (4, 8, 12 視窗)
-- 變化率: 1 期、4 期、13 期
-- 時間特徵: Year/Quarter/Month/Week + sin/cos 季節編碼
-- 外生特徵: 能源、匯率、股市代理、事件指標
+Core features:
+- Autoregressive: lag1–lag4
+- Rolling statistics: MA/STD/MAX/MIN (4, 8, 12 windows)
+- Rate of change: 1-period, 4-period, 13-period
+- Time features: Year/Quarter/Month/Week + sine/cosine seasonal encoding
+- Exogenous features: energy prices, exchange rates, stock market proxies, event indicators
 
-原則:
-- 以可解釋為優先
-- 保持可遞迴推進，確保未來期可生成特徵
+Principles:
+- Prioritize interpretability
+- Maintain recursive compatibility so future periods can generate features
 
-## 5. 模型策略
+## 5. Modeling Strategy
 
-### 5.1 模型組合
+### 5.1 Model Combination
 
 1. XGBoost:
-- 主力模型，處理非線性與特徵交互
-- 以 walk-forward 驗證進行參數選擇
+   - Primary model for handling non-linearity and feature interactions
+   - Hyperparameter selection via walk-forward validation
 
 2. SARIMA:
-- 作為時序基準模型
-- 提供趨勢/季節結構補充
+   - Time-series baseline model
+   - Provides supplementary trend/seasonal structure
 
-### 5.2 集成方式
+### 5.2 Ensemble Method
 
-- 以反向 MAPE 產生權重:
-  - 權重 = `(1 / MAPE_i) / Σ(1 / MAPE_j)`
-- 單模型失敗時自動退化為可用模型輸出
+- Weights derived from inverse MAPE:
+  - Weight = `(1 / MAPE_i) / sum(1 / MAPE_j)`
+- Auto-fallback to available model output when a single model fails
 
-### 5.3 未來期推進
+### 5.3 Future Period Forecasting
 
-- XGBoost 採遞迴逐季預測:
-  - 先預測下一季
-  - 回填 target 派生特徵 (lag/rolling/change)
-  - 持續推進到目標季度
-- 外生變數採阻尼漂移投影:
-  - 依最近 8 季估計 drift 並逐季衰減
-  - 事件型變數維持狀態值
-- SARIMA 直接多步預測並切出目標年度
+- XGBoost uses recursive quarter-by-quarter prediction:
+  - Predict next quarter
+  - Back-fill target-derived features (lag/rolling/change)
+  - Continue advancing to target quarters
+- Exogenous variables use damped drift projection:
+  - Estimate drift from the most recent 8 quarters with per-step decay
+  - Event-type variables maintain their state values
+- SARIMA produces multi-step forecasts directly, sliced to the target year
 
-### 5.4 不確定區間
+### 5.4 Uncertainty Intervals
 
-- 區間由歷史波動率 + 測試殘差分布動態估計
-- 避免固定比例上下限造成失真
+- Intervals are dynamically estimated from historical volatility + test residual distribution
+- Avoids distortion from fixed-percentage upper/lower bounds
 
-## 6. 評估方法
+## 6. Evaluation Methodology
 
-- 時序切分訓練/測試，不打亂時間順序
-- 訓練集內 walk-forward 驗證
+- Time-series train/test split without shuffling temporal order
+- Walk-forward validation within the training set
 
-主要指標:
+Key metrics:
 - MAE
 - RMSE
 - MAPE
 - Direction Accuracy
 
-建議驗收門檻:
+Suggested acceptance thresholds:
 - MAPE <= 8%
 - Direction Accuracy >= 65%
 
-## 7. 常見問題與處理
+## 7. Common Issues and Handling
 
-1. 外部資料格式/下載失敗
-- 加入 Yahoo 回傳格式健壯處理 (含 MultiIndex close 抽取)
-- 快取可降低外部依賴風險
+1. External data format/download failures
+   - Robust handling for Yahoo Finance response formats (including MultiIndex close extraction)
+   - Caching reduces external dependency risk
 
-2. 時序資料洩漏
-- 全流程禁用反向填補
-- 僅使用歷史資料與遞迴生成特徵
+2. Time-series data leakage
+   - No backward-fill allowed throughout the pipeline
+   - Only historical data and recursively generated features are used
 
-3. 重複訓練耗時
-- 改為一次訓練、多年度輸出 (`--years 2025 2026`)
+3. Repeated training overhead
+   - Single training run with multi-year output (`--years 2025 2026`)
 
-4. 結構性事件衝擊
-- 事件虛擬變數保留
-- 情境區間反映殘差不確定性
+4. Structural event shocks
+   - Event dummy variables are retained
+   - Scenario intervals reflect residual uncertainty
 
-## 8. 本次最終優化成果
+## 8. Final Optimization Results
 
 - `ipa_data_collector.py`
-  - 強化 yfinance 相容性
-  - 新增快取讀寫與 refresh 控制
-  - 保留因果向前填補
+  - Enhanced yfinance compatibility
+  - Added cache read/write and refresh control
+  - Maintained causal forward-fill
 - `ipa_price_prediction.py`
-  - CLI 參數化 (`--years`, `--refresh-cache`, `--no-cache`)
-  - 一次訓練多年度輸出
-  - 外生變數阻尼漂移投影
-  - 遞迴式季度預測 + 自適應不確定區間
+  - CLI parameterization (`--years`, `--refresh-cache`, `--no-cache`)
+  - Single training, multi-year output
+  - Exogenous variable damped drift projection
+  - Recursive quarterly prediction + adaptive uncertainty intervals
 - `ipa_models.py`
-  - 清理噪音輸出與不必要 import
-- 文件與報告
-  - 移除 emoji/圖示字元
-  - 更新 README 與報告輸出
+  - Cleaned up noisy output and unnecessary imports
+- Documentation and reports
+  - Removed emoji/icon characters
+  - Updated README and report outputs
 
-## 9. 結案維護建議
+## 9. Closure and Maintenance Recommendations
 
-此案建議採「結案維護模式」:
-- 不再新增模型家族或改動核心口徑
-- 僅允許必要維護:
-  - API 相容性修正
-  - 報告年度更新
-  - 快取刷新
+This project is recommended to enter "closure maintenance mode":
+- No new model families or changes to core methodology
+- Only essential maintenance is permitted:
+  - API compatibility fixes
+  - Report year updates
+  - Cache refresh
 
-## 10. 執行與重現
+## 10. Execution and Reproduction
 
-安裝:
+Installation:
 
 ```bash
 cd IPA_Price_Prediction/Code
 pip install yfinance xgboost scikit-learn matplotlib statsmodels
 ```
 
-執行:
+Execution:
 
 ```bash
 python ipa_price_prediction.py --years 2025 2026
 ```
 
-刷新資料快取:
+Refresh data cache:
 
 ```bash
 python ipa_price_prediction.py --years 2025 2026 --refresh-cache
 ```
 
-輸出:
-- 圖表: `IPA_Price_Prediction/Code/figures/`
-- 報告: `IPA_Price_Prediction/Code/reports/ipa_forecast_2025.html`
-- 報告: `IPA_Price_Prediction/Code/reports/ipa_forecast_2026.html`
+Output:
+- Charts: `IPA_Price_Prediction/Code/figures/`
+- Reports: `IPA_Price_Prediction/Code/reports/ipa_forecast_2025.html`
+- Reports: `IPA_Price_Prediction/Code/reports/ipa_forecast_2026.html`
