@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-02-24 13:24:26",
+  "generated_at": "2026-03-04 19:19:47",
   "target_year": 2026,
   "start_date": "2012-01-01",
   "end_date": "2024-12-31",
-  "cache_dir": "C:\\Users\\zhong\\Desktop\\project\\Engineering-Economic-ML-Framework\\IPA_Price_Prediction\\Code\\Data",
+  "cache_dir": "J:\\Git Project\\Localhost\\Project\\Engineering-Economic-ML-Framework\\IPA_Price_Prediction\\Code\\Data",
   "use_cache": true,
   "refresh_cache": false,
   "random_seed": 42,
@@ -13,7 +13,7 @@
     "ensemble": "Ensemble"
   },
   "ensemble_weights": {
-    "xgboost": 0.8222799931970042,
-    "sarima": 0.17772000680299577
-  }
+    "xgboost": 1.0
+  },
+  "backtest_rows": 6
 }

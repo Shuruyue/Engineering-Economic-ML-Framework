@@ -37,8 +37,16 @@ class IPAPricePredictor:
         'Year', 'Quarter', 'Month', 'Week',
         'Month_sin', 'Month_cos', 'Quarter_sin', 'Quarter_cos'
     }
+    BASE_EXOGENOUS_FEATURES = tuple(
+        IPAFeatureEngineer.EXOGENOUS_COLS + IPADataCollector.EVENT_COLUMNS
+    )
     EVENT_FEATURE_KEYWORDS = {
         'COVID19', 'Ukraine_War', 'RedSea_Crisis', 'US_China_Trade', 'Geopolitical_Risk'
+    }
+    TARGET_CHANGE_PERIODS = {
+        'pct_change': 1,
+        'monthly_change': 2,
+        'quarterly_change': 4,
     }
 
     def __init__(
@@ -71,6 +79,8 @@ class IPAPricePredictor:
         self.results: List[Dict[str, Any]] = []
         self.feature_cols: List[str] = []
         self.exogenous_feature_cols: List[str] = []
+        self.base_exogenous_feature_cols: List[str] = []
+        self.backtest_results: List[Dict[str, Any]] = []
         self.X: Optional[np.ndarray] = None
         self.y: Optional[np.ndarray] = None
         self.y_test: Optional[np.ndarray] = None
@@ -116,20 +126,78 @@ class IPAPricePredictor:
             result[col] = result[col].clip(lower=lower, upper=upper)
         return result
 
-    def _walk_forward_mape(self, X, y, params, n_splits=4):
-        if len(X) < 16:
-            return float('inf')
-        usable_splits = min(n_splits, max(2, len(X) // 8))
+    @staticmethod
+    def _direction_accuracy(y_true, y_pred):
+        y_true = np.asarray(y_true, dtype=float)
+        y_pred = np.asarray(y_pred, dtype=float)
+        if y_true.size <= 1:
+            return 0.0
+        true_direction = np.diff(y_true) > 0
+        pred_direction = np.diff(y_pred) > 0
+        return float(np.mean(true_direction == pred_direction) * 100)
+
+    def _walk_forward_backtest(
+        self,
+        y,
+        model_key,
+        params,
+        X=None,
+        n_splits=4,
+        min_train_size=12
+    ):
+        y = np.asarray(y, dtype=float)
+        if y.size < (min_train_size + 4):
+            return {'CV_MAPE': float('inf'), 'CV_Folds': 0}, []
+
+        usable_splits = min(n_splits, max(2, y.size // 8))
         splitter = TimeSeriesSplit(n_splits=usable_splits)
-        fold_scores = []
-        for train_idx, val_idx in splitter.split(X):
-            if len(train_idx) < 8 or len(val_idx) == 0:
+        fold_rows = []
+
+        for fold_id, (train_idx, val_idx) in enumerate(splitter.split(y), start=1):
+            if len(train_idx) < min_train_size or len(val_idx) == 0:
                 continue
-            model = XGBoostModel(**params)
-            model.fit(X[train_idx], y[train_idx])
-            pred = model.predict(X[val_idx])
-            fold_scores.append(self._safe_mape(y[val_idx], pred))
-        return float(np.mean(fold_scores)) if fold_scores else float('inf')
+
+            y_train = y[train_idx]
+            y_val = y[val_idx]
+
+            try:
+                if model_key == 'xgboost':
+                    model = XGBoostModel(**params)
+                    model.fit(X[train_idx], y_train)
+                    pred = np.asarray(model.predict(X[val_idx]), dtype=float)
+                elif model_key == 'sarima':
+                    model = ARIMAModel(order=params['order'], seasonal_order=params['seasonal_order'])
+                    model.fit(y_train)
+                    pred = np.asarray(model.predict(len(val_idx)), dtype=float)
+                else:
+                    raise ValueError(f"Unsupported model_key for backtest: {model_key}")
+            except Exception as e:
+                logger.warning("Backtest fold %s failed for %s: %s", fold_id, model_key, e)
+                continue
+
+            fold_rows.append({
+                'ModelKey': model_key,
+                'Fold': fold_id,
+                'TrainSize': int(len(train_idx)),
+                'ValSize': int(len(val_idx)),
+                'MAE': float(np.mean(np.abs(y_val - pred))),
+                'RMSE': float(np.sqrt(np.mean((y_val - pred) ** 2))),
+                'MAPE': self._safe_mape(y_val, pred),
+                'Direction_Accuracy': self._direction_accuracy(y_val, pred)
+            })
+
+        if not fold_rows:
+            return {'CV_MAPE': float('inf'), 'CV_Folds': 0}, []
+
+        fold_df = pd.DataFrame(fold_rows)
+        summary = {
+            'CV_MAE': float(fold_df['MAE'].mean()),
+            'CV_RMSE': float(fold_df['RMSE'].mean()),
+            'CV_MAPE': float(fold_df['MAPE'].mean()),
+            'CV_Direction_Accuracy': float(fold_df['Direction_Accuracy'].mean()),
+            'CV_Folds': int(len(fold_df))
+        }
+        return summary, fold_rows
 
     def _fit_xgboost_with_cv(self, X_train, y_train):
         param_grid = [
@@ -145,39 +213,98 @@ class IPAPricePredictor:
             {'n_estimators': 250, 'max_depth': 4, 'learning_rate': 0.03, 'subsample': 0.8},
         ]
         print("Walk-forward tuning for XGBoost...")
-        best_params, best_score = None, float('inf')
+        best_params, best_summary, best_rows = None, {'CV_MAPE': float('inf')}, []
         for params in param_grid:
-            cv_mape = self._walk_forward_mape(X_train, y_train, params=params)
+            cv_summary, cv_rows = self._walk_forward_backtest(
+                y_train,
+                model_key='xgboost',
+                params=params,
+                X=X_train
+            )
+            cv_mape = cv_summary.get('CV_MAPE', float('inf'))
             print(f"  Params {params} -> CV MAPE: {cv_mape:.2f}%")
-            if cv_mape < best_score:
-                best_score, best_params = cv_mape, params
+            if cv_mape < best_summary.get('CV_MAPE', float('inf')):
+                best_params, best_summary, best_rows = params, cv_summary, cv_rows
         if best_params is None:
             best_params = {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.1}
-            best_score = float('nan')
+            best_summary = {'CV_MAPE': float('nan'), 'CV_Folds': 0}
         print(f"Best XGBoost params: {best_params}")
         model = XGBoostModel(**best_params)
         model.fit(X_train, y_train)
-        return model, best_params, best_score
+        return model, best_params, best_summary, best_rows
+
+    def _fit_sarima_with_cv(self, y_train):
+        param_grid = [
+            {'order': (1, 1, 1), 'seasonal_order': (1, 1, 1, 4)},
+            {'order': (1, 1, 0), 'seasonal_order': (1, 1, 0, 4)},
+            {'order': (0, 1, 1), 'seasonal_order': (0, 1, 1, 4)},
+            {'order': (2, 1, 1), 'seasonal_order': (1, 1, 0, 4)},
+        ]
+        print("Walk-forward tuning for SARIMA...")
+        best_params, best_summary, best_rows = None, {'CV_MAPE': float('inf')}, []
+        for params in param_grid:
+            cv_summary, cv_rows = self._walk_forward_backtest(
+                y_train,
+                model_key='sarima',
+                params=params
+            )
+            cv_mape = cv_summary.get('CV_MAPE', float('inf'))
+            print(f"  Params {params} -> CV MAPE: {cv_mape:.2f}%")
+            if cv_mape < best_summary.get('CV_MAPE', float('inf')):
+                best_params, best_summary, best_rows = params, cv_summary, cv_rows
+
+        if best_params is None:
+            best_params = {'order': (1, 1, 1), 'seasonal_order': (1, 1, 1, 4)}
+            best_summary = {'CV_MAPE': float('nan'), 'CV_Folds': 0}
+
+        print(f"Best SARIMA params: {best_params}")
+        model = ARIMAModel(order=best_params['order'], seasonal_order=best_params['seasonal_order'])
+        model.fit(y_train)
+        return model, best_params, best_summary, best_rows
 
     def _derive_ensemble_weights(self):
-        valid_rows = [
-            r for r in self.results
-            if r.get('ModelKey') in {'xgboost', 'sarima'}
-            and r.get('MAPE') is not None
-            and np.isfinite(r['MAPE'])
-        ]
+        valid_rows = []
+        for row in self.results:
+            if row.get('ModelKey') not in {'xgboost', 'sarima'}:
+                continue
+            cv_error = row.get('CV_MAPE')
+            test_error = row.get('MAPE')
+            selected_error = cv_error if cv_error is not None and np.isfinite(cv_error) else test_error
+            if selected_error is None or not np.isfinite(selected_error):
+                continue
+            valid_rows.append((row['ModelKey'], float(selected_error)))
         if not valid_rows:
             self.ensemble_weights = {}
             return
+        error_by_model = {model_key: error_value for model_key, error_value in valid_rows}
+        best_error = min(error_by_model.values())
+        eligibility_ratio = 3.0
+        eligible_errors = {
+            model_key: error_value
+            for model_key, error_value in error_by_model.items()
+            if error_value <= best_error * eligibility_ratio
+        } or error_by_model
+
         inverse_error = {}
-        for row in valid_rows:
-            inverse_error[row['ModelKey']] = 1.0 / max(float(row['MAPE']), 1e-6)
+        weight_power = 2.0
+        for model_key, error_value in eligible_errors.items():
+            inverse_error[model_key] = (1.0 / max(error_value, 1e-6)) ** weight_power
         total = sum(inverse_error.values())
         self.ensemble_weights = {m: w / total for m, w in inverse_error.items()} if total > 0 else {}
         print("Adaptive ensemble weights:")
         for model_key, weight in self.ensemble_weights.items():
             model_name = self.model_display_names.get(model_key, model_key)
             print(f"  {model_name}: {weight:.2%}")
+
+    def _get_model_blend_weights(self, model_keys):
+        if not model_keys:
+            return {}
+        raw_weights = {k: float(self.ensemble_weights.get(k, 0.0)) for k in model_keys}
+        total = sum(raw_weights.values())
+        if total <= 0:
+            uniform = 1.0 / len(model_keys)
+            return {k: uniform for k in model_keys}
+        return {k: v / total for k, v in raw_weights.items()}
 
     def _evaluate_ensemble_on_test(self):
         if self.y_test is None or len(self.y_test) == 0:
@@ -186,15 +313,10 @@ class IPAPricePredictor:
             return None
         self.results = [r for r in self.results if r.get('ModelKey') != 'ensemble']
 
-        w_xgb = self.ensemble_weights.get('xgboost', 0.5)
-        w_sarima = self.ensemble_weights.get('sarima', 0.5)
-        total = w_xgb + w_sarima
-        if total <= 0:
-            w_xgb, w_sarima = 0.5, 0.5
-        else:
-            w_xgb, w_sarima = w_xgb / total, w_sarima / total
-
         if 'xgboost_test' in self.predictions and 'sarima_test' in self.predictions:
+            weights = self._get_model_blend_weights(['xgboost', 'sarima'])
+            w_xgb = weights['xgboost']
+            w_sarima = weights['sarima']
             ensemble_test = (
                 np.asarray(self.predictions['xgboost_test'], dtype=float) * w_xgb +
                 np.asarray(self.predictions['sarima_test'], dtype=float) * w_sarima
@@ -222,6 +344,8 @@ class IPAPricePredictor:
         self.results = []
         self.feature_cols = []
         self.exogenous_feature_cols = []
+        self.base_exogenous_feature_cols = []
+        self.backtest_results = []
         self.future_predictions = None
         self.sensitivity_results = None
         self.feature_importance_df = None
@@ -248,11 +372,14 @@ class IPAPricePredictor:
         self.data = self._clip_outliers(self.data, exclude_cols=['IPA_Price_TWD'])
 
         print("\n[4/4] Feature engineering...")
-        self.data = feature_engineer.prepare_features(self.data, target_col='IPA_Price_TWD')
-        self.quarterly_data = feature_engineer.resample_to_quarterly(self.data).sort_index()
+        quarterly_base = feature_engineer.resample_to_quarterly(self.data).sort_index()
+        self.quarterly_data = feature_engineer.prepare_quarterly_features(
+            quarterly_base,
+            target_col='IPA_Price_TWD'
+        ).sort_index()
 
         print("\n[OK] Data preparation complete")
-        print(f"  Weekly data: {len(self.data)} records")
+        print(f"  Weekly merged data: {len(self.data)} records")
         print(f"  Quarterly data: {len(self.quarterly_data)} records")
         return self
 
@@ -285,15 +412,22 @@ class IPAPricePredictor:
 
         print("\n" + "-" * 40)
         print("Training XGBoost model...")
-        xgb_model, best_params, cv_mape = self._fit_xgboost_with_cv(X_train, y_train)
+        xgb_model, best_params, xgb_cv_summary, xgb_cv_rows = self._fit_xgboost_with_cv(X_train, y_train)
         xgb_pred = xgb_model.predict(X_test)
         xgb_name = xgb_model.get_display_name()
         self.model_display_names['xgboost'] = xgb_name
         xgb_results = ModelEvaluator.evaluate(y_test, xgb_pred, xgb_name)
         xgb_results['ModelKey'] = 'xgboost'
-        xgb_results['CV_MAPE'] = cv_mape
+        xgb_results['CV_MAPE'] = xgb_cv_summary.get('CV_MAPE')
+        xgb_results['CV_RMSE'] = xgb_cv_summary.get('CV_RMSE')
+        xgb_results['CV_Direction_Accuracy'] = xgb_cv_summary.get('CV_Direction_Accuracy')
+        xgb_results['CV_Folds'] = xgb_cv_summary.get('CV_Folds')
         xgb_results['Params'] = str(best_params)
         self.results.append(xgb_results)
+        for fold_row in xgb_cv_rows:
+            row = dict(fold_row)
+            row['Model'] = xgb_name
+            self.backtest_results.append(row)
         ModelEvaluator.print_results(xgb_results)
         self.models['xgboost'] = xgb_model
         self.predictions['xgboost_test'] = np.asarray(xgb_pred, dtype=float)
@@ -304,12 +438,20 @@ class IPAPricePredictor:
         print("\n" + "-" * 40)
         print("Training SARIMA model...")
         try:
-            arima_model = ARIMAModel(order=(1, 1, 1), seasonal_order=(1, 1, 1, 4))
-            arima_model.fit(y_train)
+            arima_model, sarima_params, sarima_cv_summary, sarima_cv_rows = self._fit_sarima_with_cv(y_train)
             arima_pred_array = np.asarray(arima_model.predict(len(y_test)), dtype=float)
             arima_results = ModelEvaluator.evaluate(y_test, arima_pred_array, "SARIMA")
             arima_results['ModelKey'] = 'sarima'
+            arima_results['CV_MAPE'] = sarima_cv_summary.get('CV_MAPE')
+            arima_results['CV_RMSE'] = sarima_cv_summary.get('CV_RMSE')
+            arima_results['CV_Direction_Accuracy'] = sarima_cv_summary.get('CV_Direction_Accuracy')
+            arima_results['CV_Folds'] = sarima_cv_summary.get('CV_Folds')
+            arima_results['Params'] = str(sarima_params)
             self.results.append(arima_results)
+            for fold_row in sarima_cv_rows:
+                row = dict(fold_row)
+                row['Model'] = 'SARIMA'
+                self.backtest_results.append(row)
             ModelEvaluator.print_results(arima_results)
             self.models['sarima'] = arima_model
             self.predictions['sarima_test'] = arima_pred_array
@@ -321,6 +463,7 @@ class IPAPricePredictor:
             c for c in self.feature_cols
             if (not self._is_target_derived_feature(c)) and (c not in self.TIME_FEATURES)
         ]
+        self.base_exogenous_feature_cols = [c for c in self.feature_cols if c in self.BASE_EXOGENOUS_FEATURES]
         self._derive_ensemble_weights()
         print("\n" + "-" * 40)
         print("Evaluating Ensemble model...")
@@ -379,14 +522,14 @@ class IPAPricePredictor:
         return 0.0 if abs(base) < 1e-6 else float((values[-1] - base) / base)
 
     def _project_exogenous_features(self, future_periods):
-        if not self.exogenous_feature_cols:
+        if not self.base_exogenous_feature_cols:
             return pd.DataFrame(index=pd.PeriodIndex(future_periods, freq='Q'))
 
-        history_df = self.quarterly_data[self.exogenous_feature_cols].copy()
+        history_df = self.quarterly_data[self.base_exogenous_feature_cols].copy()
         forecast_index = pd.PeriodIndex(future_periods, freq='Q')
-        projection = pd.DataFrame(index=forecast_index, columns=self.exogenous_feature_cols, dtype=float)
+        projection = pd.DataFrame(index=forecast_index, columns=self.base_exogenous_feature_cols, dtype=float)
 
-        for col in self.exogenous_feature_cols:
+        for col in self.base_exogenous_feature_cols:
             series = history_df[col].dropna().astype(float)
             if series.empty:
                 projection[col] = 0.0
@@ -406,13 +549,53 @@ class IPAPricePredictor:
                 projection.at[period, col] = max(value, 0.0) if last_value >= 0 else value
         return projection.ffill().bfill().fillna(0.0)
 
-    def _build_future_feature_row(self, future_period, target_history, template_row, exogenous_values=None):
+    def _update_exogenous_derived_features(self, row, exogenous_history):
+        if exogenous_history is None or exogenous_history.empty:
+            return row
+
+        latest = exogenous_history.iloc[-1]
+        previous = exogenous_history.iloc[-2] if len(exogenous_history) >= 2 else latest
+        rolling_windows = [2, 4, 8]
+
+        for col in self.base_exogenous_feature_cols:
+            if col in row.index and col in latest.index:
+                row[col] = float(latest[col])
+
+            lag_col = f'{col}_lag1'
+            if lag_col in row.index and col in previous.index:
+                row[lag_col] = float(previous[col])
+
+            if col not in exogenous_history.columns:
+                continue
+            series = exogenous_history[col].dropna().astype(float).to_numpy(dtype=float)
+            for w in rolling_windows:
+                ma_col = f'{col}_ma{w}'
+                if ma_col not in row.index:
+                    continue
+                d = series[-w:] if series.size >= w else series
+                row[ma_col] = float(np.mean(d)) if d.size else 0.0
+
+        for col_a, col_b in IPAFeatureEngineer.INTERACTION_PAIRS:
+            interaction_col = f'{col_a}_x_{col_b}'
+            if interaction_col in row.index and col_a in row.index and col_b in row.index:
+                row[interaction_col] = float(row[col_a]) * float(row[col_b])
+
+        return row
+
+    def _build_future_feature_row(
+        self,
+        future_period,
+        target_history,
+        template_row,
+        exogenous_values=None,
+        exogenous_history=None
+    ):
         row = template_row.copy()
         history = np.asarray(target_history, dtype=float)
         ts = future_period.to_timestamp(how='end')
 
         if exogenous_values is not None:
-            for col in self.exogenous_feature_cols:
+            for col in self.base_exogenous_feature_cols:
                 if col in row.index and col in exogenous_values.index:
                     row[col] = float(exogenous_values[col])
 
@@ -465,11 +648,13 @@ class IPAPricePredictor:
                 row[col] = float(np.min(d)) if d.size else 0.0
                 continue
             if col == 'IPA_Price_TWD_pct_change':
-                row[col] = self._safe_pct_change(history, periods=1)
+                row[col] = self._safe_pct_change(history, periods=self.TARGET_CHANGE_PERIODS['pct_change'])
             elif col == 'IPA_Price_TWD_monthly_change':
-                row[col] = self._safe_pct_change(history, periods=4)
+                row[col] = self._safe_pct_change(history, periods=self.TARGET_CHANGE_PERIODS['monthly_change'])
             elif col == 'IPA_Price_TWD_quarterly_change':
-                row[col] = self._safe_pct_change(history, periods=13)
+                row[col] = self._safe_pct_change(history, periods=self.TARGET_CHANGE_PERIODS['quarterly_change'])
+
+        row = self._update_exogenous_derived_features(row, exogenous_history)
 
         return row.reindex(self.feature_cols).fillna(0.0).astype(float)
 
@@ -481,6 +666,9 @@ class IPAPricePredictor:
         total_steps, step_offset, all_periods, target_periods = self._compute_forecast_horizon(quarters_ahead)
         predictions = {}
         exog_projection = self._project_exogenous_features(all_periods)
+        exog_history = pd.DataFrame()
+        if self.base_exogenous_feature_cols:
+            exog_history = self.quarterly_data[self.base_exogenous_feature_cols].copy()
 
         if 'xgboost' in self.models:
             xgb_path = []
@@ -488,11 +676,15 @@ class IPAPricePredictor:
             template_row = self.quarterly_data[self.feature_cols].iloc[-1].copy()
             for period in all_periods:
                 exogenous_values = exog_projection.loc[period] if not exog_projection.empty else None
+                if exogenous_values is not None and not exog_history.empty:
+                    period_ts = period.to_timestamp(how='end')
+                    exog_history.loc[period_ts] = exogenous_values.reindex(self.base_exogenous_feature_cols).to_numpy(dtype=float)
                 feature_row = self._build_future_feature_row(
                     period,
                     target_history,
                     template_row,
-                    exogenous_values=exogenous_values
+                    exogenous_values=exogenous_values,
+                    exogenous_history=exog_history
                 )
                 next_pred = float(self.models['xgboost'].predict(feature_row.to_numpy(dtype=float).reshape(1, -1))[0])
                 xgb_path.append(next_pred)
@@ -508,13 +700,9 @@ class IPAPricePredictor:
                 print(f"SARIMA prediction failed: {e}")
 
         if 'xgboost' in predictions and 'sarima' in predictions:
-            w_xgb = self.ensemble_weights.get('xgboost', 0.5)
-            w_sarima = self.ensemble_weights.get('sarima', 0.5)
-            total = w_xgb + w_sarima
-            if total <= 0:
-                w_xgb, w_sarima = 0.5, 0.5
-            else:
-                w_xgb, w_sarima = w_xgb / total, w_sarima / total
+            weights = self._get_model_blend_weights(['xgboost', 'sarima'])
+            w_xgb = weights['xgboost']
+            w_sarima = weights['sarima']
             predictions['ensemble'] = (
                 np.asarray(predictions['xgboost'], dtype=float) * w_xgb +
                 np.asarray(predictions['sarima'], dtype=float) * w_sarima
@@ -535,13 +723,9 @@ class IPAPricePredictor:
         residual_ratio = 0.03
         if self.y_test is not None and len(self.y_test) > 0:
             if 'xgboost_test' in self.predictions and 'sarima_test' in self.predictions:
-                w_xgb = self.ensemble_weights.get('xgboost', 0.5)
-                w_sarima = self.ensemble_weights.get('sarima', 0.5)
-                total = w_xgb + w_sarima
-                if total <= 0:
-                    w_xgb, w_sarima = 0.5, 0.5
-                else:
-                    w_xgb, w_sarima = w_xgb / total, w_sarima / total
+                weights = self._get_model_blend_weights(['xgboost', 'sarima'])
+                w_xgb = weights['xgboost']
+                w_sarima = weights['sarima']
                 base_test = (
                     np.asarray(self.predictions['xgboost_test']) * w_xgb +
                     np.asarray(self.predictions['sarima_test']) * w_sarima
@@ -797,6 +981,7 @@ class IPAPricePredictor:
     <ul>
       <li><a href="./ipa_forecast_{self.target_year}.csv">Quarterly forecast CSV</a></li>
       <li><a href="./model_metrics.csv">Model metrics CSV</a></li>
+      <li><a href="./walk_forward_backtest.csv">Walk-forward backtest CSV</a></li>
       <li><a href="./feature_importance.csv">Feature importance CSV</a></li>
       <li><a href="./sensitivity_analysis.csv">Sensitivity analysis CSV</a></li>
       <li><a href="./run_manifest_{self.target_year}.json">Run manifest JSON</a></li>
@@ -854,6 +1039,12 @@ class IPAPricePredictor:
             metrics_df.to_csv(metrics_csv, index=False)
             artifact_paths['model_metrics_csv'] = metrics_csv
 
+        if self.backtest_results:
+            backtest_df = pd.DataFrame(self.backtest_results)
+            backtest_csv = os.path.join(output_path, 'walk_forward_backtest.csv')
+            backtest_df.to_csv(backtest_csv, index=False)
+            artifact_paths['walk_forward_backtest_csv'] = backtest_csv
+
         if self.feature_importance_df is not None and not self.feature_importance_df.empty:
             fi_csv = os.path.join(output_path, 'feature_importance.csv')
             self.feature_importance_df.to_csv(fi_csv, index=False)
@@ -890,6 +1081,7 @@ class IPAPricePredictor:
             'ensemble_weights': {
                 k: float(v) for k, v in self.ensemble_weights.items()
             },
+            'backtest_rows': int(len(self.backtest_results)),
         }
         with open(manifest_json, 'w', encoding='utf-8') as f:
             json.dump(manifest_payload, f, ensure_ascii=False, indent=2, default=self._json_compatible)

@@ -210,3 +210,18 @@ class TestPrepareFeaturesFullPipeline:
         quarterly = fe.resample_to_quarterly(featured)
         assert 'Quarter_Label' in quarterly.columns
         assert len(quarterly) <= len(featured)
+
+    def test_prepare_quarterly_features(self, fe):
+        dates = pd.date_range('2014-03-31', periods=44, freq='QE')
+        df = pd.DataFrame(
+            {
+                'IPA_Price_TWD': np.linspace(35, 55, len(dates)),
+                'WTI_Price': np.linspace(60, 90, len(dates)),
+                'USD_TWD': np.linspace(29, 33, len(dates)),
+            },
+            index=dates,
+        )
+        featured = fe.prepare_quarterly_features(df, 'IPA_Price_TWD')
+        assert len(featured) > 0
+        assert 'IPA_Price_TWD_lag1' in featured.columns
+        assert 'WTI_Price_lag1' in featured.columns

@@ -5,10 +5,11 @@
 ## 最終優化重點 (封版)
 
 1. 資料蒐集穩定化: 快取欄位驗證、輸出 schema 標準化、缺依賴時可降級執行。  
-2. 特徵工程完整化: 目標序列驗證與插值 fallback（`cubic -> linear`）。  
-3. 模型評估一致化: 以內部模型 key 計算自適應權重，避免名稱不一致。  
-4. 交付工件補齊: HTML、圖表、CSV、JSON manifest、多年度總表一次產出。  
-5. 文件封版: 執行參數、輸出定義、維護邊界明確化。  
+2. 特徵工程重構: 改為「季度先行」特徵管線，避免先週後季造成 lag/rolling 語意偏移。  
+3. 回測與集成強化: XGBoost / SARIMA 均採 walk-forward backtest 調參，ensemble 以 CV 誤差加權且自動剔除弱模型。  
+4. 遞迴預測一致化: 未來期會同步重算外生衍生特徵（lag/rolling/interaction），避免沿用過時模板值。  
+5. 交付工件補齊: HTML、圖表、CSV、JSON manifest、多年度總表與 walk-forward 回測明細一次產出。  
+6. 文件封版: 執行參數、輸出定義、維護邊界明確化。  
 
 ## 專案目標
 
@@ -25,8 +26,8 @@
   - lag / rolling / pct change / time seasonal encoding
 - 模型:
   - Walk-forward 調參樹模型 (`XGBoost`，若缺套件自動降級 `GradientBoosting`)
-  - `SARIMA` 基準模型
-  - 依測試 `MAPE` 反向加權 ensemble
+  - Walk-forward 調參 `SARIMA`
+  - 依 CV `MAPE` 反向加權（平方）ensemble，並自動抑制高誤差模型
 - 預測:
   - 遞迴式逐季推進
   - 外生變數阻尼漂移投影
@@ -89,6 +90,7 @@ python ipa_price_prediction.py --years 2025 2026 --figures-dir figures --reports
   - `feature_importance.csv`
   - `sensitivity_analysis.csv`
   - `ensemble_weights.json`
+  - `walk_forward_backtest.csv`
   - `run_manifest_2025.json`
   - `run_manifest_2026.json`
 
@@ -99,3 +101,7 @@ python ipa_price_prediction.py --years 2025 2026 --figures-dir figures --reports
 - 套件/API 相容性修正
 - 快取資料刷新
 - 報告年份延伸
+
+補充技術說明:
+
+- `Technical_Optimization_2026.md`: 三輪優化內容、驗證結果與論文依據。

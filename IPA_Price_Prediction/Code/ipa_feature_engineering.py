@@ -228,7 +228,13 @@ class IPAFeatureEngineer:
             
         return result
     
-    def create_change_features(self, df, target_col):
+    def create_change_features(
+        self,
+        df,
+        target_col,
+        monthly_period=4,
+        quarterly_period=13
+    ):
         """
         Create rate of change features
         """
@@ -237,11 +243,11 @@ class IPAFeatureEngineer:
         # Weekly change rate
         result[f'{target_col}_pct_change'] = result[target_col].pct_change()
         
-        # Monthly change rate (4 weeks)
-        result[f'{target_col}_monthly_change'] = result[target_col].pct_change(periods=4)
+        # Short-horizon change rate
+        result[f'{target_col}_monthly_change'] = result[target_col].pct_change(periods=monthly_period)
         
-        # Quarterly change rate (13 weeks)
-        result[f'{target_col}_quarterly_change'] = result[target_col].pct_change(periods=13)
+        # Long-horizon change rate
+        result[f'{target_col}_quarterly_change'] = result[target_col].pct_change(periods=quarterly_period)
         
         return result
     
@@ -351,6 +357,31 @@ class IPAFeatureEngineer:
         
         print(f"[OK] Feature engineering complete! Total {len(df.columns)} features")
         
+        return df
+
+    def prepare_quarterly_features(self, quarterly_df, target_col='IPA_Price_TWD'):
+        """
+        Quarterly-first feature engineering pipeline.
+
+        This avoids averaging already-derived weekly lag/rolling features into quarter
+        buckets, which can distort time semantics.
+        """
+        print("Starting quarterly feature engineering...")
+        df = self._validate_target_series(quarterly_df.copy(), target_col)
+
+        # For quarterly modeling, use quarter-aligned windows.
+        df = self.create_lag_features(df, target_col, lags=[1, 2, 3, 4])
+        df = self.create_rolling_features(df, target_col, windows=[2, 4, 8])
+        df = self.create_change_features(
+            df,
+            target_col,
+            monthly_period=2,
+            quarterly_period=4
+        )
+        df = self.create_time_features(df)
+        df = self.create_exogenous_features(df, windows=[2, 4])
+        df = df.dropna()
+        print(f"[OK] Quarterly feature engineering complete! Total {len(df.columns)} features")
         return df
     
     def scale_features(self, X, y=None, fit=True):

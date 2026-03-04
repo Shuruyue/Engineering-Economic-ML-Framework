@@ -118,9 +118,9 @@ class TestDeriveEnsembleWeights:
         ]
         predictor._derive_ensemble_weights()
         assert 'xgboost' in predictor.ensemble_weights
-        assert 'sarima' in predictor.ensemble_weights
-        # XGBoost should have higher weight (lower MAPE)
-        assert predictor.ensemble_weights['xgboost'] > predictor.ensemble_weights['sarima']
+        # If both survive filter, xgboost should have larger weight.
+        if 'sarima' in predictor.ensemble_weights:
+            assert predictor.ensemble_weights['xgboost'] > predictor.ensemble_weights['sarima']
         # Weights should sum to 1
         total = sum(predictor.ensemble_weights.values())
         assert total == pytest.approx(1.0)
@@ -140,6 +140,28 @@ class TestDeriveEnsembleWeights:
         predictor._derive_ensemble_weights()
         assert 'sarima' not in predictor.ensemble_weights
         assert predictor.ensemble_weights['xgboost'] == pytest.approx(1.0)
+
+    def test_cv_mape_priority(self, predictor):
+        predictor.results = [
+            {'ModelKey': 'xgboost', 'MAPE': 1.0, 'CV_MAPE': 9.0},
+            {'ModelKey': 'sarima', 'MAPE': 8.0, 'CV_MAPE': 4.0},
+        ]
+        predictor._derive_ensemble_weights()
+        assert predictor.ensemble_weights['sarima'] > predictor.ensemble_weights['xgboost']
+
+
+class TestGetModelBlendWeights:
+    def test_missing_model_weight_is_zero(self, predictor):
+        predictor.ensemble_weights = {'xgboost': 1.0}
+        weights = predictor._get_model_blend_weights(['xgboost', 'sarima'])
+        assert weights['xgboost'] == pytest.approx(1.0)
+        assert weights['sarima'] == pytest.approx(0.0)
+
+    def test_uniform_when_empty(self, predictor):
+        predictor.ensemble_weights = {}
+        weights = predictor._get_model_blend_weights(['xgboost', 'sarima'])
+        assert weights['xgboost'] == pytest.approx(0.5)
+        assert weights['sarima'] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +188,43 @@ class TestBuildFutureFeatureRow:
         assert row['IPA_Price_TWD_lag2'] == 44.0  # second last
         assert row['Year'] == 2025
         assert row['Quarter'] == 1
+
+    def test_exogenous_derived_recomputed(self, predictor):
+        predictor.feature_cols = [
+            'IPA_Price_TWD_lag1',
+            'WTI_Price',
+            'WTI_Price_lag1',
+            'WTI_Price_ma2',
+            'USD_TWD',
+            'WTI_Price_x_USD_TWD',
+            'Year',
+            'Quarter',
+        ]
+        predictor.base_exogenous_feature_cols = ['WTI_Price', 'USD_TWD']
+
+        template = pd.Series([0.0] * len(predictor.feature_cols), index=predictor.feature_cols, dtype=float)
+        target_history = [40.0, 42.0, 44.0, 46.0]
+        future_period = pd.Period('2025Q1', freq='Q')
+        exog_history = pd.DataFrame(
+            {
+                'WTI_Price': [70.0, 72.0, 75.0],
+                'USD_TWD': [31.0, 31.2, 31.5],
+            },
+            index=pd.date_range('2024-06-30', periods=3, freq='QE'),
+        )
+        exog_values = pd.Series({'WTI_Price': 75.0, 'USD_TWD': 31.5})
+
+        row = predictor._build_future_feature_row(
+            future_period,
+            target_history,
+            template,
+            exogenous_values=exog_values,
+            exogenous_history=exog_history,
+        )
+        assert row['WTI_Price'] == pytest.approx(75.0)
+        assert row['WTI_Price_lag1'] == pytest.approx(72.0)
+        assert row['WTI_Price_ma2'] == pytest.approx((72.0 + 75.0) / 2)
+        assert row['WTI_Price_x_USD_TWD'] == pytest.approx(75.0 * 31.5)
 
 
 # ---------------------------------------------------------------------------
