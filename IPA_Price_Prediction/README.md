@@ -2,15 +2,6 @@
 
 This sub-project is the final version of the IPA (Isopropyl Alcohol) price prediction for the Engineering Economics course, focusing on **reproducibility, deliverability, and maintainability**.
 
-## Final Optimization Highlights (Sealed)
-
-1. Data collection stabilization: cache field validation, output schema standardization, graceful degradation when dependencies are missing.
-2. Feature engineering refactoring: switched to a "quarterly-first" feature pipeline to prevent lag/rolling semantic drift from weekly-then-quarterly averaging.
-3. Backtesting and ensemble strengthening: both XGBoost and SARIMA use walk-forward backtest for hyperparameter tuning; ensemble uses inverse CV error weighting with automatic weak model suppression.
-4. Recursive prediction consistency: future periods recompute exogenous derived features (lag/rolling/interaction) at each step, avoiding stale template values.
-5. Deliverable artifacts: HTML, charts, CSV, JSON manifest, multi-year summary, and walk-forward backtest details are all generated in one run.
-6. Documentation sealed: execution parameters, output definitions, and maintenance boundaries are clearly defined.
-
 ## Project Goals
 
 - Use historical data from `2012-01-01` to `2024-12-31`.
